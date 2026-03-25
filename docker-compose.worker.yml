@@ -1,0 +1,29 @@
+version: "3.9"
+
+# Laptop GPU worker: connects to TrueNAS DB + Redis remotely
+# Run on the laptop with: docker compose -f docker-compose.worker.yml up
+
+services:
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=1
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://daytrade_user:${POSTGRES_PASSWORD}@192.168.68.10:5432/bballvideo
+      - REDIS_URL=redis://192.168.68.10:6380/0
+      - STORAGE_BASE_PATH=/data/bballvideo
+      - STORAGE_MAX_GB=1024
+    volumes:
+      - worker_storage:/data/bballvideo
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  worker_storage:

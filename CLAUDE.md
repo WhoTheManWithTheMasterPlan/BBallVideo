@@ -36,30 +36,32 @@ Roster management is built into the backend — coaches upload player photos, an
 - D3.js (court viz — heatmaps, player paths, shot charts)
 - Recharts (stat dashboards)
 
-### Infrastructure
-- TrueNAS local storage (1TB limit)
-- Docker Compose on TrueNAS (all services)
-- GPU inference on TrueNAS (Tesla T4 / RTX A2000)
+### Infrastructure (Split Architecture)
+- **TrueNAS (192.168.68.10)**: FastAPI API (:8001), Next.js frontend (:3001), PostgreSQL (:5432), Redis (:6380), local storage (1TB)
+- **Laptop (RTX 3070)**: Celery GPU worker connects to TrueNAS DB + Redis remotely
+- Two Dockerfiles for backend: `Dockerfile.api` (lightweight, no ML libs) and `Dockerfile` (full, with torch/YOLO/etc.)
+- Two requirements files: `requirements-api.txt` (API only) and `requirements.txt` (full ML stack)
 
 ## Commands
 
 ```bash
-# Backend
+# Deploy to TrueNAS (backend + frontend)
+ssh root@192.168.68.10
+cd /mnt/apps/bballvideo/app && git pull && docker compose up -d --build
+
+# Run GPU worker on laptop
+docker compose -f docker-compose.worker.yml up --build
+
+# Local dev — backend
 cd backend && pip install -r requirements.txt
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8001
 
-# Frontend
+# Local dev — frontend
 cd frontend && npm install
-npm run dev
+npm run dev -- -p 3001
 
-# Workers
+# Local dev — worker
 celery -A app.workers.celery_app worker --loglevel=info
-
-# Docker (full stack local)
-docker compose up
-
-# Storage base path (set in .env or environment)
-# STORAGE_BASE_PATH=/mnt/bball-video  (TrueNAS dataset mount point)
 ```
 
 ## Data Flow
