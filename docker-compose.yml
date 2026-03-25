@@ -1,5 +1,3 @@
-version: "3.9"
-
 # TrueNAS deployment: backend API + frontend
 # Database (docker-db-1:5432) and Redis (bballvideo-redis:6380) run as standalone containers on TrueNAS
 
@@ -10,10 +8,8 @@ services:
       dockerfile: Dockerfile.api
     ports:
       - "8001:8000"
-    env_file:
-      - ./backend/.env
     environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-daytrade_user}:${POSTGRES_PASSWORD}@host.docker.internal:5432/bballvideo
+      - DATABASE_URL=postgresql+asyncpg://daytrade_user:${POSTGRES_PASSWORD}@host.docker.internal:5432/bballvideo
       - REDIS_URL=redis://host.docker.internal:6380/0
       - STORAGE_BASE_PATH=/data/bballvideo
       - STORAGE_MAX_GB=1024
@@ -34,4 +30,3 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
-
