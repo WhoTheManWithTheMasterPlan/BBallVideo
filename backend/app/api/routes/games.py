@@ -20,8 +20,10 @@ async def create_game(
         title=game_in.title,
         home_team=game_in.home_team,
         away_team=game_in.away_team,
-        game_date=game_in.game_date,
+        game_date=game_in.game_date.replace(tzinfo=None),
         user_id=game_in.user_id,
+        home_roster_id=game_in.home_roster_id,
+        away_roster_id=game_in.away_roster_id,
     )
     db.add(game)
     await db.commit()
