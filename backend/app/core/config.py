@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     max_video_size_mb: int = 2048
     supported_formats: list[str] = [".mp4", ".mov", ".avi", ".mkv"]
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 settings = Settings()
