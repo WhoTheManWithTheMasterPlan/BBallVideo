@@ -1,13 +1,26 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from contextlib import asynccontextmanager
+
 from app.api.routes import games, uploads, stats, clips, files, roster
 from app.core.config import settings
+from app.core.database import engine, Base
+import app.models  # noqa: F401 — register all models with Base.metadata
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create tables on startup (dev convenience — replace with Alembic for prod)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
 
 app = FastAPI(
     title="BBallVideo API",
     description="Basketball video analysis platform",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(

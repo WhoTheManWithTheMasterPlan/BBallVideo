@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     supabase_key: str = ""
 
     # CORS
-    cors_origins: list[str] = ["http://localhost:3000"]
+    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001", "http://192.168.68.10:3001"]
 
     # Processing
     max_video_size_mb: int = 2048
