@@ -8,9 +8,6 @@ import uuid
 from pathlib import Path
 
 from app.workers.celery_app import celery_app
-from app.services.video.storage import copy_file, save_file, get_file_path
-from app.services.video.clipper import extract_clip, extract_thumbnail
-from app.services.inference.pipeline import InferencePipeline
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +23,11 @@ def process_video(self, game_id: str):
     4. Save clips to local storage
     5. Write stats to database
     """
+    # Lazy imports — ML libs only available on the GPU worker
+    from app.services.video.storage import copy_file, save_file, get_file_path
+    from app.services.video.clipper import extract_clip, extract_thumbnail
+    from app.services.inference.pipeline import InferencePipeline
+
     logger.info(f"Starting processing for game {game_id}")
     self.update_state(state="PROCESSING", meta={"step": "loading"})
 

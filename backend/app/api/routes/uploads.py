@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.game import Game
 from app.services.video.storage import save_upload, check_storage_limit
-from app.workers.tasks import process_video
+from app.workers.celery_app import celery_app
 
 router = APIRouter()
 
@@ -70,5 +70,5 @@ async def trigger_processing(
     game.status = "processing"
     await db.commit()
 
-    task = process_video.delay(game_id)
+    task = celery_app.send_task("process_video", args=[game_id])
     return {"task_id": task.id, "status": "queued"}

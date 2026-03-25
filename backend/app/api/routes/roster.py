@@ -8,17 +8,17 @@ from app.core.database import get_db
 from app.models.roster import Roster, RosterPlayer
 from app.schemas.roster import RosterCreate, RosterResponse, RosterPlayerResponse
 from app.services.video.storage import save_upload, check_storage_limit
-from app.services.inference.reid import ReIDExtractor
 
 router = APIRouter()
 
-# Lazy-loaded ReID model (expensive to initialize)
-_reid: ReIDExtractor | None = None
+# Lazy-loaded ReID model (expensive to initialize, needs ML libs)
+_reid = None
 
 
-def get_reid() -> ReIDExtractor:
+def get_reid():
     global _reid
     if _reid is None:
+        from app.services.inference.reid import ReIDExtractor
         _reid = ReIDExtractor()
     return _reid
 
