@@ -13,13 +13,22 @@ router = APIRouter()
 
 # Lazy-loaded ReID model (expensive to initialize, needs ML libs)
 _reid = None
+_reid_available = None
 
 
 def get_reid():
-    global _reid
+    """Returns ReIDExtractor if ML libs are available, None otherwise."""
+    global _reid, _reid_available
+    if _reid_available is False:
+        return None
     if _reid is None:
-        from app.services.inference.reid import ReIDExtractor
-        _reid = ReIDExtractor()
+        try:
+            from app.services.inference.reid import ReIDExtractor
+            _reid = ReIDExtractor()
+            _reid_available = True
+        except ImportError:
+            _reid_available = False
+            return None
     return _reid
 
 
@@ -129,11 +138,12 @@ async def upload_player_photo(
     save_upload(file_key, data)
     player.photo_file_key = file_key
 
-    # Generate ReID embedding from photo
+    # Generate ReID embedding from photo (skipped if ML libs not available)
     reid = get_reid()
-    embedding_bytes = reid.extract_from_bytes(data)
-    if embedding_bytes is not None:
-        player.reid_embedding = embedding_bytes
+    if reid is not None:
+        embedding_bytes = reid.extract_from_bytes(data)
+        if embedding_bytes is not None:
+            player.reid_embedding = embedding_bytes
 
     await db.commit()
     await db.refresh(player)
@@ -160,8 +170,17 @@ async def upload_team_photo(
     file_key = f"photos/{roster_id}/team_photo.jpg"
     save_upload(file_key, data)
 
-    # Detect players and extract embeddings
+    # Detect players and extract embeddings (skipped if ML libs not available)
     reid = get_reid()
+    if reid is None:
+        await db.commit()
+        return {
+            "players_detected": 0,
+            "players_matched": 0,
+            "unmatched": 0,
+            "note": "ReID not available on this server — embeddings will be generated when GPU worker processes the game",
+        }
+
     player_extractions = reid.extract_from_team_photo(data)
 
     matched = 0
