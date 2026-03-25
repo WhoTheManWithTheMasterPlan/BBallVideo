@@ -1,0 +1,43 @@
+# API
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.18
+
+# Database
+sqlalchemy==2.0.36
+alembic==1.14.1
+asyncpg==0.30.0
+psycopg2-binary==2.9.10
+
+# Job Queue
+celery==5.4.0
+redis==5.2.1
+
+# ML / Inference
+ultralytics==8.3.52
+torch==2.5.1
+torchvision==0.20.1
+transformers==4.47.1
+open-clip-torch==2.29.0
+paddleocr==2.9.1
+paddlepaddle==3.0.0b1
+
+# Video
+opencv-python-headless==4.10.0.84
+ffmpeg-python==0.2.0
+
+# ReID (player re-identification)
+timm==1.0.12
+
+# Storage (local filesystem — no external dependencies)
+
+# Auth
+supabase==2.11.0
+python-jose[cryptography]==3.3.0
+
+# Utils
+pydantic==2.10.4
+pydantic-settings==2.7.1
+httpx==0.28.1
+python-dotenv==1.0.1
+numpy==2.2.1

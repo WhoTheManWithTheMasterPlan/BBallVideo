@@ -1,0 +1,14 @@
+# YOLOv8 training config for basketball event detection
+# Train on ~500 labeled frames to detect: made_shot, missed_shot, turnover, fast_break
+
+path: ../data
+train: annotations/train
+val: annotations/val
+
+names:
+  0: made_shot
+  1: missed_shot
+  2: turnover
+  3: fast_break
+  4: free_throw
+  5: steal
