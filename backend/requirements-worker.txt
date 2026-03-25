@@ -1,12 +1,7 @@
-# API
-fastapi>=0.115
-uvicorn[standard]>=0.34
-python-multipart>=0.0.18
+# Worker-specific requirements (GPU inference on laptop)
 
 # Database
 sqlalchemy>=2.0
-alembic>=1.14
-asyncpg>=0.30
 psycopg[binary]>=3.2
 
 # Job Queue
@@ -27,10 +22,6 @@ ffmpeg-python>=0.2
 
 # ReID (player re-identification)
 timm>=1.0
-
-# Auth
-supabase>=2.11
-python-jose[cryptography]>=3.3
 
 # Utils
 pydantic>=2.10

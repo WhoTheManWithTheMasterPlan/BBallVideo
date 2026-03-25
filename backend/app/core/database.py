@@ -8,8 +8,8 @@ from app.core.config import settings
 engine = create_async_engine(settings.database_url, echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-# Sync engine for Celery workers (converts asyncpg URL to psycopg2)
-sync_database_url = settings.database_url.replace("+asyncpg", "")
+# Sync engine for Celery workers (converts asyncpg URL to psycopg)
+sync_database_url = settings.database_url.replace("+asyncpg", "+psycopg")
 sync_engine = create_engine(sync_database_url, echo=False)
 sync_session = sessionmaker(sync_engine, class_=Session, expire_on_commit=False)
 

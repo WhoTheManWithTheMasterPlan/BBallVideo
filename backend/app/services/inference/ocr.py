@@ -1,14 +1,14 @@
 """
-Jersey number OCR using PaddleOCR.
+Jersey number OCR using EasyOCR.
 """
 
 import numpy as np
-from paddleocr import PaddleOCR
+import easyocr
 
 
 class JerseyOCR:
     def __init__(self):
-        self.ocr = PaddleOCR(use_angle_cls=True, lang="en", show_log=False)
+        self.reader = easyocr.Reader(["en"], gpu=True, verbose=False)
 
     def read_number(self, player_crop: np.ndarray) -> int | None:
         """
@@ -16,14 +16,12 @@ class JerseyOCR:
 
         Returns the jersey number as int, or None if unreadable.
         """
-        results = self.ocr.ocr(player_crop, cls=True)
-        if not results or not results[0]:
+        results = self.reader.readtext(player_crop, allowlist="0123456789")
+        if not results:
             return None
 
-        for line in results[0]:
-            text = line[1][0].strip()
-            confidence = line[1][1]
-
+        for bbox, text, confidence in results:
+            text = text.strip()
             # Jersey numbers are 0-99
             if text.isdigit() and 0 <= int(text) <= 99 and confidence > 0.5:
                 return int(text)
