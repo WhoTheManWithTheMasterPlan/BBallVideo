@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class GameEvent:
-    event_type: str  # made_2pt, made_3pt, miss, turnover, steal
+    event_type: str  # possession, made_shot, turnover, etc.
     frame_idx: int
     timestamp: float  # seconds
     player_track_id: int | None = None
@@ -75,6 +75,7 @@ class InferencePipeline:
 
         self.players: dict[int, PlayerInfo] = {}
         self.events: list[GameEvent] = []
+        self._fps: float = 30.0
 
     def _get_player_crop(self, frame: np.ndarray, det: Detection) -> np.ndarray:
         x1, y1, x2, y2 = [int(v) for v in det.bbox]
@@ -151,34 +152,86 @@ class InferencePipeline:
                 if player.jersey_votes[number] >= 3:
                     player.jersey_number = number
 
+    def _detect_events(self, frame_idx: int, timestamp: float, detections: list[Detection]):
+        """MVP event detection: create possession markers at intervals."""
+        # Every ~5 seconds, create a possession event
+        interval_frames = int(5 * self._fps)
+        if interval_frames <= 0:
+            interval_frames = 150
+
+        if frame_idx == 0 or frame_idx % interval_frames != 0:
+            return
+
+        # Find ball and person detections
+        ball_dets = [d for d in detections if d.class_name == "ball"]
+        person_dets = [d for d in detections if d.class_name == "person" and d.track_id >= 0]
+
+        if not person_dets:
+            return
+
+        # Find the player nearest to the ball (if ball detected)
+        nearest_track_id = None
+        if ball_dets:
+            ball = ball_dets[0]
+            ball_cx = (ball.bbox[0] + ball.bbox[2]) / 2
+            ball_cy = (ball.bbox[1] + ball.bbox[3]) / 2
+
+            best_dist = float("inf")
+            for det in person_dets:
+                px = (det.bbox[0] + det.bbox[2]) / 2
+                py = (det.bbox[1] + det.bbox[3]) / 2
+                dist = ((px - ball_cx) ** 2 + (py - ball_cy) ** 2) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    nearest_track_id = det.track_id
+        else:
+            # No ball detected — pick a random tracked person
+            nearest_track_id = person_dets[0].track_id
+
+        player_info = self.players.get(nearest_track_id)
+
+        self.events.append(GameEvent(
+            event_type="possession",
+            frame_idx=frame_idx,
+            timestamp=timestamp,
+            player_track_id=nearest_track_id,
+            team=player_info.team_name if player_info else None,
+            jersey_number=player_info.jersey_number if player_info else None,
+            player_name=player_info.player_name if player_info else None,
+        ))
+
     def process(self, video_path: str) -> list[GameEvent]:
         """Run the full inference pipeline on a video."""
         cap = cv2.VideoCapture(video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
+        self._fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.release()
 
-        logger.info(f"Processing video: {video_path} at {fps} FPS")
+        logger.info(f"Processing video: {video_path} at {self._fps} FPS, {total_frames} frames")
         logger.info(f"Roster players loaded: {len(self.reid_matcher.roster_embeddings)}")
 
+        # Open a parallel reader for frame crops — stays in sync with YOLO stream
+        frame_reader = cv2.VideoCapture(video_path)
+
         for frame_idx, detections in self.detector.process_video(video_path):
-            timestamp = frame_idx / fps if fps > 0 else 0
+            timestamp = frame_idx / self._fps if self._fps > 0 else 0
 
-            # Read the frame for crops
-            cap = cv2.VideoCapture(video_path)
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-            ret, frame = cap.read()
-            cap.release()
-
+            ret, frame = frame_reader.read()
             if not ret:
-                continue
+                break
 
             for det in detections:
                 self._update_player_info(det, frame)
 
-            # TODO: Event detection logic
-            # - Ball trajectory analysis for made/missed shots
-            # - Possession change detection
-            # - Fast break detection
+            self._detect_events(frame_idx, timestamp, detections)
+
+            # Log progress every 1000 frames
+            if frame_idx > 0 and frame_idx % 1000 == 0:
+                pct = (frame_idx / total_frames * 100) if total_frames > 0 else 0
+                logger.info(f"Frame {frame_idx}/{total_frames} ({pct:.1f}%) — "
+                           f"{len(self.events)} events, {len(self.players)} players")
+
+        frame_reader.release()
 
         # Summary
         matched = sum(1 for p in self.players.values() if p.is_roster_matched)

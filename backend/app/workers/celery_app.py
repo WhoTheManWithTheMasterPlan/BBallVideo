@@ -15,7 +15,7 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
-    task_time_limit=3600,  # 1 hour max per video
+    task_time_limit=7200,  # 2 hours max per video
     worker_prefetch_multiplier=1,  # One video at a time per worker
 )
 
