@@ -19,11 +19,13 @@ router = APIRouter()
 
 @router.post("/", response_model=VideoResponse)
 async def create_video(data: VideoCreate, db: AsyncSession = Depends(get_db)):
+    # Strip timezone info — DB column is timezone-naive
+    game_date = data.game_date.replace(tzinfo=None) if data.game_date else None
     video = Video(
         user_id=data.user_id,
         title=data.title,
         opponent=data.opponent,
-        game_date=data.game_date,
+        game_date=game_date,
     )
     db.add(video)
     await db.commit()
