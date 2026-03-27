@@ -23,7 +23,16 @@ export async function PUT(request: NextRequest, { params }: { params: { path: st
 
 async function proxy(request: NextRequest, pathSegments: string[]) {
   const url = new URL(request.url);
-  const targetUrl = `${BACKEND_URL}${url.pathname}${url.search}`;
+  // Cloudflare strips trailing slashes via 308 redirect before we see the request.
+  // FastAPI expects trailing slashes on collection endpoints.
+  // Re-add trailing slash unless the path has a file extension or UUID-like final segment.
+  let pathname = url.pathname;
+  const lastSegment = pathSegments[pathSegments.length - 1] || "";
+  const looksLikeResource = lastSegment.includes(".") || lastSegment.includes("-");
+  if (!pathname.endsWith("/") && !looksLikeResource) {
+    pathname += "/";
+  }
+  const targetUrl = `${BACKEND_URL}${pathname}${url.search}`;
 
   const headers = new Headers();
   request.headers.forEach((value, key) => {
@@ -33,14 +42,13 @@ async function proxy(request: NextRequest, pathSegments: string[]) {
     }
   });
 
-  let body: ArrayBuffer | string | null = null;
+  let body: ArrayBuffer | null = null;
 
   if (request.method !== "GET" && request.method !== "HEAD") {
     const contentType = request.headers.get("content-type") || "";
     if (contentType) {
       headers.set("content-type", contentType);
     }
-    // Buffer the body — streaming causes issues with redirects in Node.js fetch
     body = await request.arrayBuffer();
   }
 
@@ -48,7 +56,6 @@ async function proxy(request: NextRequest, pathSegments: string[]) {
     method: request.method,
     headers,
     body,
-    redirect: "follow",
   });
 
   const respHeaders = new Headers();

@@ -21,7 +21,6 @@ app = FastAPI(
     description="Basketball video analysis platform",
     version="0.2.0",
     lifespan=lifespan,
-    redirect_slashes=False,
 )
 
 app.add_middleware(
