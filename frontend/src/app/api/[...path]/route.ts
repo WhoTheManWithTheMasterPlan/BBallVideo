@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
 
-// Allow large uploads (2GB video files)
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
@@ -24,34 +23,37 @@ export async function PUT(request: NextRequest, { params }: { params: { path: st
 
 async function proxy(request: NextRequest, pathSegments: string[]) {
   const url = new URL(request.url);
-  // Preserve the original path including trailing slash
-  const originalPath = url.pathname.replace(/^\/?/, "");
-  const targetUrl = `${BACKEND_URL}/${originalPath}${url.search}`;
+  // Preserve original path — ensure trailing slash to avoid FastAPI 307 redirects
+  let apiPath = url.pathname;
+  if (!apiPath.endsWith("/") && !apiPath.includes(".")) {
+    apiPath += "/";
+  }
+  const targetUrl = `${BACKEND_URL}${apiPath}${url.search}`;
 
   const headers = new Headers();
   request.headers.forEach((value, key) => {
-    if (key.toLowerCase() !== "host" && key.toLowerCase() !== "content-length") {
+    const lower = key.toLowerCase();
+    if (lower !== "host" && lower !== "content-length" && lower !== "transfer-encoding") {
       headers.set(key, value);
     }
   });
 
-  let body: BodyInit | null = null;
+  let body: ArrayBuffer | string | null = null;
 
   if (request.method !== "GET" && request.method !== "HEAD") {
-    // Stream the body directly — don't buffer large uploads in memory
-    body = request.body as ReadableStream<Uint8Array> | null;
-    const contentType = request.headers.get("content-type");
+    const contentType = request.headers.get("content-type") || "";
     if (contentType) {
       headers.set("content-type", contentType);
     }
+    // Buffer the body — streaming causes issues with redirects in Node.js fetch
+    body = await request.arrayBuffer();
   }
 
   const resp = await fetch(targetUrl, {
     method: request.method,
     headers,
     body,
-    // @ts-expect-error - Node.js fetch supports duplex for streaming
-    duplex: "half",
+    redirect: "follow",
   });
 
   const respHeaders = new Headers();
