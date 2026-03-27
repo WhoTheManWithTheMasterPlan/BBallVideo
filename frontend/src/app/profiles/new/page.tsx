@@ -10,6 +10,9 @@ const USER_ID = "default";
 export default function NewProfilePage() {
   const router = useRouter();
   const [name, setName] = useState("");
+  const [jerseyNumber, setJerseyNumber] = useState("");
+  const [teamColorPrimary, setTeamColorPrimary] = useState("");
+  const [teamColorSecondary, setTeamColorSecondary] = useState("");
   const [photos, setPhotos] = useState<File[]>([]);
   const [creating, setCreating] = useState(false);
   const [uploadingPhotos, setUploadingPhotos] = useState(false);
@@ -21,7 +24,13 @@ export default function NewProfilePage() {
     setCreating(true);
 
     try {
-      const profile = (await api.profiles.create({ name: name.trim(), user_id: USER_ID })) as Profile;
+      const profile = (await api.profiles.create({
+        name: name.trim(),
+        user_id: USER_ID,
+        jersey_number: jerseyNumber ? parseInt(jerseyNumber) : undefined,
+        team_color_primary: teamColorPrimary || undefined,
+        team_color_secondary: teamColorSecondary || undefined,
+      })) as Profile;
 
       if (photos.length > 0) {
         setUploadingPhotos(true);
@@ -59,6 +68,49 @@ export default function NewProfilePage() {
             placeholder="e.g. Tyler Smith"
             className="w-full px-4 py-2 bg-gray-900 rounded-lg border border-gray-700 focus:border-orange-500 focus:outline-none"
           />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-2">Jersey Number</label>
+          <input
+            value={jerseyNumber}
+            onChange={(e) => setJerseyNumber(e.target.value)}
+            type="number"
+            min="0"
+            max="99"
+            placeholder="e.g. 23"
+            className="w-32 px-4 py-2 bg-gray-900 rounded-lg border border-gray-700 focus:border-orange-500 focus:outline-none"
+          />
+          <p className="text-gray-500 text-xs mt-1">Helps the AI confirm player identity via jersey OCR.</p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium mb-2">Team Jersey Colors</label>
+          <p className="text-gray-500 text-xs mb-3">
+            Describe the jersey colors so the AI can classify teams (e.g. "white", "dark blue", "red and black").
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Primary color</label>
+              <input
+                value={teamColorPrimary}
+                onChange={(e) => setTeamColorPrimary(e.target.value)}
+                type="text"
+                placeholder="e.g. white"
+                className="w-full px-4 py-2 bg-gray-900 rounded-lg border border-gray-700 focus:border-orange-500 focus:outline-none text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Secondary color (optional)</label>
+              <input
+                value={teamColorSecondary}
+                onChange={(e) => setTeamColorSecondary(e.target.value)}
+                type="text"
+                placeholder="e.g. blue"
+                className="w-full px-4 py-2 bg-gray-900 rounded-lg border border-gray-700 focus:border-orange-500 focus:outline-none text-sm"
+              />
+            </div>
+          </div>
         </div>
 
         <div>

@@ -1,6 +1,9 @@
 export interface Profile {
   id: string;
   name: string;
+  jersey_number: number | null;
+  team_color_primary: string | null;
+  team_color_secondary: string | null;
   photos: ProfilePhoto[];
   created_at: string;
 }

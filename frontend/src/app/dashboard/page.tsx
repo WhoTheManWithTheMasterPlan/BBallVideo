@@ -79,9 +79,15 @@ export default function DashboardPage() {
                     </div>
                   )}
                   <div>
-                    <div className="font-medium">{profile.name}</div>
+                    <div className="font-medium">
+                      {profile.name}
+                      {profile.jersey_number !== null && (
+                        <span className="ml-2 text-sm text-gray-400">#{profile.jersey_number}</span>
+                      )}
+                    </div>
                     <div className="text-xs text-gray-400">
                       {profile.photos.length} photo{profile.photos.length !== 1 ? "s" : ""}
+                      {profile.team_color_primary && ` · ${profile.team_color_primary}`}
                     </div>
                   </div>
                 </div>

@@ -37,6 +37,7 @@ class InferencePipeline:
         model_path: str = "yolov8x.pt",
         hoop_model_path: str | None = None,
         profile_embeddings: list[np.ndarray] | None = None,
+        profile_jersey_number: int | None = None,
         team_descriptions: list[str] | None = None,
         team_names: list[str] | None = None,
     ):
@@ -46,6 +47,9 @@ class InferencePipeline:
         self.reid_extractor = ReIDExtractor()
         self.reid_matcher = ReIDMatcher()
         self.ocr = JerseyOCR()
+
+        # Profile jersey number — used to boost/confirm ReID matches
+        self.profile_jersey_number = profile_jersey_number
 
         # Optional CLIP classifier for team assignment
         self.classifier = None
@@ -85,12 +89,32 @@ class InferencePipeline:
             match = self.reid_matcher.match(embedding)
             if match:
                 player.reid_votes["target"] = player.reid_votes.get("target", 0) + 1
-                if player.reid_votes["target"] >= 3:
+                votes_needed = 3
+
+                # Jersey number match lowers the confirmation threshold
+                if (self.profile_jersey_number is not None
+                        and player.jersey_number == self.profile_jersey_number):
+                    votes_needed = 1  # Instant confirm: ReID + jersey match
+
+                if player.reid_votes["target"] >= votes_needed:
                     player.is_target = True
                     player.reid_confidence = match.confidence
                     self.target_track_ids.add(det.track_id)
                     logger.info(f"Track {det.track_id} matched to target profile "
-                               f"(confidence={match.confidence:.2f})")
+                               f"(confidence={match.confidence:.2f}, "
+                               f"jersey={'match' if player.jersey_number == self.profile_jersey_number else 'n/a'})")
+
+        # Jersey number match alone (no ReID needed if jersey is confirmed)
+        if (not player.is_target
+                and self.profile_jersey_number is not None
+                and player.jersey_number == self.profile_jersey_number
+                and player.jersey_votes.get(self.profile_jersey_number, 0) >= 5):
+            # Strong jersey OCR evidence (5+ reads) — accept as target even without ReID
+            player.is_target = True
+            player.reid_confidence = 0.5  # Lower confidence for jersey-only match
+            self.target_track_ids.add(det.track_id)
+            logger.info(f"Track {det.track_id} matched to target by jersey #{self.profile_jersey_number} "
+                       f"(OCR-only, {player.jersey_votes[self.profile_jersey_number]} reads)")
 
         # Team classification via CLIP (every 30 frames, if configured)
         if self.classifier and det.frame_idx % 30 == 0 and player.team_name is None:

@@ -73,6 +73,16 @@ def process_video(self, job_id: str):
 
         logger.info(f"Profile '{profile.name}': {len(profile_embeddings)} photo embeddings loaded")
 
+        # Build team color descriptions for CLIP classifier
+        team_descriptions = []
+        team_names = []
+        if profile.team_color_primary:
+            team_descriptions.append(f"person wearing {profile.team_color_primary} jersey")
+            team_names.append("target_team")
+            # Add a generic "other team" description
+            team_descriptions.append("person wearing different colored jersey")
+            team_names.append("opponent")
+
         # --- Step 2: Resolve video path ---
         if settings.remote_storage_enabled:
             from app.services.video.remote_storage import download_file
@@ -108,6 +118,9 @@ def process_video(self, job_id: str):
         pipeline = InferencePipeline(
             hoop_model_path=hoop_model_path,
             profile_embeddings=profile_embeddings if profile_embeddings else None,
+            profile_jersey_number=profile.jersey_number,
+            team_descriptions=team_descriptions if team_descriptions else None,
+            team_names=team_names if team_names else None,
         )
         events = pipeline.process(video_path)
         logger.info(f"Inference complete: {len(events)} events for target profile")

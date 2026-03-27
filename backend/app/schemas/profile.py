@@ -7,6 +7,9 @@ from pydantic import BaseModel
 class ProfileCreate(BaseModel):
     name: str
     user_id: str
+    jersey_number: int | None = None
+    team_color_primary: str | None = None
+    team_color_secondary: str | None = None
 
 
 class ProfilePhotoResponse(BaseModel):
@@ -23,6 +26,9 @@ class ProfilePhotoResponse(BaseModel):
 class ProfileResponse(BaseModel):
     id: uuid.UUID
     name: str
+    jersey_number: int | None
+    team_color_primary: str | None
+    team_color_secondary: str | None
     photos: list[ProfilePhotoResponse]
     created_at: datetime
 

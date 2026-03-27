@@ -22,7 +22,13 @@ export const api = {
       fetchAPI(`/api/v1/profiles/?user_id=${userId}`),
     get: (profileId: string) =>
       fetchAPI(`/api/v1/profiles/${profileId}`),
-    create: (data: { name: string; user_id: string }) =>
+    create: (data: {
+      name: string;
+      user_id: string;
+      jersey_number?: number;
+      team_color_primary?: string;
+      team_color_secondary?: string;
+    }) =>
       fetchAPI("/api/v1/profiles/", { method: "POST", body: JSON.stringify(data) }),
     uploadPhoto: async (profileId: string, photo: File) => {
       const formData = new FormData();

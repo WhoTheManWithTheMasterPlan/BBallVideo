@@ -14,7 +14,13 @@ router = APIRouter()
 
 @router.post("/", response_model=ProfileResponse)
 async def create_profile(data: ProfileCreate, db: AsyncSession = Depends(get_db)):
-    profile = Profile(user_id=data.user_id, name=data.name)
+    profile = Profile(
+        user_id=data.user_id,
+        name=data.name,
+        jersey_number=data.jersey_number,
+        team_color_primary=data.team_color_primary,
+        team_color_secondary=data.team_color_secondary,
+    )
     db.add(profile)
     await db.commit()
     await db.refresh(profile)
