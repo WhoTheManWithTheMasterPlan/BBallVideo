@@ -17,7 +17,13 @@ class Settings(BaseSettings):
     supabase_key: str = ""
 
     # CORS
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001", "http://192.168.68.10:3001"]
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:3001",
+        "http://192.168.68.10:3001",
+        "http://bball.adamsspecialtyservices.com",
+        "https://bball.adamsspecialtyservices.com",
+    ]
 
     # Remote storage (GPU worker → TrueNAS file transfer via SCP)
     remote_storage_enabled: bool = False
