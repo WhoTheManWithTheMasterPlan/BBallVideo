@@ -23,9 +23,10 @@ export async function PUT(request: NextRequest, { params }: { params: { path: st
 }
 
 async function proxy(request: NextRequest, pathSegments: string[]) {
-  const path = pathSegments.join("/");
   const url = new URL(request.url);
-  const targetUrl = `${BACKEND_URL}/api/${path}${url.search}`;
+  // Preserve the original path including trailing slash
+  const originalPath = url.pathname.replace(/^\/?/, "");
+  const targetUrl = `${BACKEND_URL}/${originalPath}${url.search}`;
 
   const headers = new Headers();
   request.headers.forEach((value, key) => {
