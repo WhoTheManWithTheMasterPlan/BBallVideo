@@ -23,12 +23,7 @@ export async function PUT(request: NextRequest, { params }: { params: { path: st
 
 async function proxy(request: NextRequest, pathSegments: string[]) {
   const url = new URL(request.url);
-  // Preserve original path — ensure trailing slash to avoid FastAPI 307 redirects
-  let apiPath = url.pathname;
-  if (!apiPath.endsWith("/") && !apiPath.includes(".")) {
-    apiPath += "/";
-  }
-  const targetUrl = `${BACKEND_URL}${apiPath}${url.search}`;
+  const targetUrl = `${BACKEND_URL}${url.pathname}${url.search}`;
 
   const headers = new Headers();
   request.headers.forEach((value, key) => {
