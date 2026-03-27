@@ -16,6 +16,7 @@ out/
 
 # Environment
 .env
+.env.*
 .env.local
 .env.production
 
@@ -33,6 +34,8 @@ Thumbs.db
 ml/weights/*.pt
 ml/weights/*.onnx
 !ml/weights/.gitkeep
+ml/models/
+*.pt
 
 # Data
 data/samples/*

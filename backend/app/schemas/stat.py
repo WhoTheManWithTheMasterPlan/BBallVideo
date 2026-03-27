@@ -4,13 +4,11 @@ from datetime import datetime
 from pydantic import BaseModel
 
 
-class StatEventResponse(BaseModel):
+class StatResponse(BaseModel):
     id: uuid.UUID
-    game_id: uuid.UUID
+    job_id: uuid.UUID
     event_type: str
     timestamp: float
-    player_id: uuid.UUID | None
-    team: str | None
     court_x: float | None
     court_y: float | None
     created_at: datetime

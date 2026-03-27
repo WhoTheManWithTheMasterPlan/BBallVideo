@@ -17,35 +17,44 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  games: {
+  profiles: {
     list: (userId: string) =>
-      fetchAPI(`/api/v1/games/?user_id=${userId}`),
-    get: (gameId: string) =>
-      fetchAPI(`/api/v1/games/${gameId}`),
-    create: (data: {
-      title: string;
-      home_team: string;
-      away_team: string;
-      game_date: string;
-      user_id: string;
-      home_roster_id?: string;
-      away_roster_id?: string;
-    }) =>
-      fetchAPI("/api/v1/games/", { method: "POST", body: JSON.stringify(data) }),
+      fetchAPI(`/api/v1/profiles/?user_id=${userId}`),
+    get: (profileId: string) =>
+      fetchAPI(`/api/v1/profiles/${profileId}`),
+    create: (data: { name: string; user_id: string }) =>
+      fetchAPI("/api/v1/profiles/", { method: "POST", body: JSON.stringify(data) }),
+    uploadPhoto: async (profileId: string, photo: File) => {
+      const formData = new FormData();
+      formData.append("photo", photo);
+      const res = await fetch(`${API_URL}/api/v1/profiles/${profileId}/photos`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+      return res.json();
+    },
+    deletePhoto: (profileId: string, photoId: string) =>
+      fetchAPI(`/api/v1/profiles/${profileId}/photos/${photoId}`, { method: "DELETE" }),
   },
-  uploads: {
-    uploadVideo: async (
-      gameId: string,
+  videos: {
+    list: (userId: string) =>
+      fetchAPI(`/api/v1/videos/?user_id=${userId}`),
+    get: (videoId: string) =>
+      fetchAPI(`/api/v1/videos/${videoId}`),
+    create: (data: { title: string; opponent?: string; game_date?: string; user_id: string }) =>
+      fetchAPI("/api/v1/videos/", { method: "POST", body: JSON.stringify(data) }),
+    uploadFile: async (
+      videoId: string,
       file: File,
       onProgress?: (percent: number) => void,
     ): Promise<{ file_key: string; size_mb: number }> => {
       const formData = new FormData();
-      formData.append("game_id", gameId);
       formData.append("video", file);
 
       return new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
-        xhr.open("POST", `${API_URL}/api/v1/uploads/`);
+        xhr.open("POST", `${API_URL}/api/v1/videos/${videoId}/upload`);
 
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable && onProgress) {
@@ -65,55 +74,40 @@ export const api = {
         xhr.send(formData);
       });
     },
-    triggerProcessing: (gameId: string) =>
-      fetchAPI(`/api/v1/uploads/${gameId}/process`, { method: "POST" }),
-  },
-  rosters: {
-    list: (userId: string) =>
-      fetchAPI(`/api/v1/rosters/?user_id=${userId}`),
-    get: (rosterId: string) =>
-      fetchAPI(`/api/v1/rosters/${rosterId}`),
-    create: (data: {
-      team_name: string;
-      season?: string;
-      jersey_color_primary?: string;
-      jersey_color_secondary?: string;
-      user_id: string;
-      players: { name: string; jersey_number: number; height_inches?: number; position?: string }[];
-    }) =>
-      fetchAPI("/api/v1/rosters/", { method: "POST", body: JSON.stringify(data) }),
-    uploadPlayerPhoto: async (playerId: string, photo: File) => {
+    triggerProcessing: async (videoId: string, profileId: string) => {
       const formData = new FormData();
-      formData.append("photo", photo);
-      const res = await fetch(`${API_URL}/api/v1/rosters/players/${playerId}/photo`, {
+      formData.append("profile_id", profileId);
+      const res = await fetch(`${API_URL}/api/v1/videos/${videoId}/process`, {
         method: "POST",
         body: formData,
       });
-      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+      if (!res.ok) throw new Error(`Process trigger failed: ${res.status}`);
       return res.json();
     },
-    uploadTeamPhoto: async (rosterId: string, photo: File) => {
-      const formData = new FormData();
-      formData.append("photo", photo);
-      const res = await fetch(`${API_URL}/api/v1/rosters/${rosterId}/team-photo`, {
-        method: "POST",
-        body: formData,
-      });
-      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-      return res.json();
+  },
+  jobs: {
+    get: (jobId: string) =>
+      fetchAPI(`/api/v1/jobs/${jobId}`),
+    listByProfile: (profileId: string) =>
+      fetchAPI(`/api/v1/jobs/profile/${profileId}`),
+    listByVideo: (videoId: string) =>
+      fetchAPI(`/api/v1/jobs/video/${videoId}`),
+  },
+  highlights: {
+    listByJob: (jobId: string, eventType?: string) => {
+      const params = eventType ? `?event_type=${eventType}` : "";
+      return fetchAPI(`/api/v1/highlights/job/${jobId}${params}`);
+    },
+    listByProfile: (profileId: string, eventType?: string) => {
+      const params = eventType ? `?event_type=${eventType}` : "";
+      return fetchAPI(`/api/v1/highlights/profile/${profileId}${params}`);
     },
   },
   stats: {
-    getGameStats: (gameId: string) =>
-      fetchAPI(`/api/v1/stats/game/${gameId}`),
-    getGameSummary: (gameId: string) =>
-      fetchAPI(`/api/v1/stats/game/${gameId}/summary`),
-  },
-  clips: {
-    getGameClips: (gameId: string, eventType?: string) => {
-      const params = eventType ? `?event_type=${eventType}` : "";
-      return fetchAPI(`/api/v1/clips/game/${gameId}${params}`);
-    },
+    listByJob: (jobId: string) =>
+      fetchAPI(`/api/v1/stats/job/${jobId}`),
+    profileSummary: (profileId: string) =>
+      fetchAPI(`/api/v1/stats/profile/${profileId}/summary`),
   },
   files: {
     getUrl: (fileKey: string) => `${API_URL}/api/v1/files/${fileKey}`,

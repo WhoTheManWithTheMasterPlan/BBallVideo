@@ -1,7 +1,7 @@
-from app.models.game import Game
-from app.models.player import Player
-from app.models.clip import Clip
-from app.models.stat import StatEvent
-from app.models.roster import Roster, RosterPlayer
+from app.models.profile import Profile, ProfilePhoto
+from app.models.video import Video
+from app.models.job import ProcessingJob
+from app.models.highlight import Highlight
+from app.models.stat import Stat
 
-__all__ = ["Game", "Player", "Clip", "StatEvent", "Roster", "RosterPlayer"]
+__all__ = ["Profile", "ProfilePhoto", "Video", "ProcessingJob", "Highlight", "Stat"]

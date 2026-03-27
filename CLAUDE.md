@@ -1,40 +1,46 @@
 # BBallVideo
 
-Basketball video analysis platform — AI-powered game film breakdown for coaches.
+Basketball video analysis platform — AI-powered player-centric game film breakdown.
 
 ## Architecture
 
 Monorepo with three main components:
-- `backend/` — FastAPI + Celery workers (Python 3.11+)
+- `backend/` — FastAPI + Celery workers (Python 3.14 on laptop, 3.11+ in Docker)
 - `frontend/` — Next.js 14 + shadcn/ui + D3.js
 - `ml/` — YOLO training configs, model weights, notebooks
 
-Roster management is built into the backend — coaches upload player photos, and the inference pipeline uses OSNet ReID embeddings to match tracked players to roster entries before falling back to CLIP/OCR.
+**Data model (player-centric)**: User → Profile → Video → ProcessingJob → Highlights/Stats.
+- **Profile**: A player to track, with photos for ReID matching
+- **Video**: Uploaded game film
+- **ProcessingJob**: Links a Video + Profile → runs inference → produces Highlights + Stats
+- **Highlight**: A clip (made basket, steal, assist) with thumbnail + confidence
+- **Stat**: Individual event record with timestamp + metadata
+
+ReID embeddings match tracked players to profile photos, with optional CLIP team classification and EasyOCR jersey number fallback.
 
 ## Tech Stack
 
 ### Inference Pipeline
-- **Player/ball detection**: YOLOv8 (Ultralytics)
-- **Player tracking**: ByteTrack (built into Ultralytics)
-- **Team classification**: Fashion CLIP (zero-shot, jersey color)
-- **Jersey number OCR**: PaddleOCR
-- **Court mapping**: OpenCV homography
-- **Player re-identification**: OSNet (via timm)
-- **Event detection**: Custom YOLO classes (made shot, turnover, etc.)
+- **Player/ball detection**: YOLOv8x (Ultralytics) — COCO classes 0 (person) + 32 (sports ball), ByteTrack tracking
+- **Hoop detection**: Separate basketball-specific model (`ml/models/shot-tracker/best.pt`, avishah3) — class 1 (Basketball Hoop)
+- **Event detection**: Made baskets (ball trajectory through hoop via up→down transition + rim interpolation), steals (cross-team possession change), assists (same-team pass within 5s before basket)
+- **Possession tracking**: Frame-by-frame state machine, ball-player proximity, 8-frame confirmation
+- **Player re-identification**: ResNet18 fallback (OSNet `osnet_x1_0` not in timm for Py3.14), 3-vote confirmation
+- **Team classification**: Fashion CLIP (Marqo/marqo-fashionCLIP, zero-shot jersey color) — optional
+- **Jersey number OCR**: EasyOCR (PaddleOCR incompatible with Python 3.14)
+- **vid_stride**: Auto-calculated from video FPS to target 30fps
 
 ### Backend
 - FastAPI (async API)
 - Celery + Redis (job queue for video processing)
-- PostgreSQL (players, games, stats, clips)
-- Local filesystem (TrueNAS) (raw video + clips)
-- Supabase Auth (multi-tenant SaaS auth)
+- PostgreSQL (profiles, videos, jobs, highlights, stats)
+- Local filesystem (TrueNAS) for raw video + highlight clips
+- Supabase Auth (multi-tenant SaaS auth — not yet integrated)
 
 ### Frontend
 - Next.js 14 (App Router)
-- shadcn/ui (components)
-- Video.js (timestamped clip playback)
-- D3.js (court viz — heatmaps, player paths, shot charts)
-- Recharts (stat dashboards)
+- D3.js (court viz — shot charts)
+- Native HTML5 video player (clip playback)
 
 ### Infrastructure (Split Architecture)
 - **TrueNAS (192.168.68.10)**: FastAPI API (:8001), Next.js frontend (:3001), PostgreSQL (:5432), Redis (:6380), local storage (1TB)
@@ -46,11 +52,12 @@ Roster management is built into the backend — coaches upload player photos, an
 
 ```bash
 # Deploy to TrueNAS (backend + frontend)
-ssh root@192.168.68.10
-cd /mnt/apps/bballvideo/app && git pull && docker compose up -d --build
+ssh root@192.168.68.10 "cd /mnt/apps/bballvideo/app && git pull && docker compose up -d --build"
 
-# Run GPU worker on laptop
-docker compose -f docker-compose.worker.yml up --build
+# Run GPU worker on laptop (must include ffmpeg in PATH)
+cd backend
+export PATH="$PATH:/c/Users/schae/AppData/Local/Microsoft/WinGet/Packages/Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-8.1-full_build/bin"
+.venv/Scripts/celery -A app.workers.celery_app worker --loglevel=info --pool=solo -n gpu-worker@ET
 
 # Local dev — backend
 cd backend && pip install -r requirements.txt
@@ -60,13 +67,58 @@ uvicorn app.main:app --reload --port 8001
 cd frontend && npm install
 npm run dev -- -p 3001
 
-# Local dev — worker
-celery -A app.workers.celery_app worker --loglevel=info
+# Trigger processing (via API)
+# POST /api/v1/videos/{video_id}/process  (Form: profile_id=<uuid>)
+
+# Check job status
+# GET /api/v1/jobs/{job_id}
+
+# Kill zombie celery workers (common issue — check before starting new worker)
+taskkill /F /IM celery.exe
+wmic process where "name='python.exe'" get ProcessId,CommandLine | findstr celery
+```
+
+## API Routes
+
+```
+POST   /api/v1/profiles/                    — Create profile
+GET    /api/v1/profiles/?user_id=           — List profiles
+GET    /api/v1/profiles/{id}                — Get profile
+POST   /api/v1/profiles/{id}/photos         — Upload photo (multipart)
+DELETE /api/v1/profiles/{id}/photos/{pid}   — Delete photo
+
+POST   /api/v1/videos/                      — Create video record
+GET    /api/v1/videos/?user_id=             — List videos
+GET    /api/v1/videos/{id}                  — Get video
+POST   /api/v1/videos/{id}/upload           — Upload video file (multipart)
+POST   /api/v1/videos/{id}/process          — Trigger processing (Form: profile_id)
+
+GET    /api/v1/jobs/{id}                    — Get job status
+GET    /api/v1/jobs/profile/{profile_id}    — Jobs by profile
+GET    /api/v1/jobs/video/{video_id}        — Jobs by video
+
+GET    /api/v1/highlights/job/{job_id}      — Highlights by job (?event_type=)
+GET    /api/v1/highlights/profile/{id}      — Highlights by profile (?event_type=)
+
+GET    /api/v1/stats/job/{job_id}           — Stats by job
+GET    /api/v1/stats/profile/{id}/summary   — Aggregate stats by event type
+
+GET    /api/v1/files/{file_key}             — Serve stored files
 ```
 
 ## Data Flow
 
-Camera → Upload to TrueNAS → Celery Job → YOLO → ByteTrack → ReID (roster match) → CLIP/OCR (fallback) → Events → FFmpeg clips → PostgreSQL stats → Coach Dashboard
+Camera → Upload video to TrueNAS via API → Create ProcessingJob (video + profile) → Celery task → SCP video to laptop temp dir → YOLO+ByteTrack (person/ball) + best.pt (hoop) → ReID match to profile embeddings → Possession tracking → Event detection (made baskets, steals, assists) → FFmpeg clip extraction → SCP clips back to TrueNAS → Highlight + Stat records → PostgreSQL → API → Frontend
+
+## Known Issues / Workarounds (Python 3.14 + Windows 11)
+
+- **Celery `platform.system()` hang**: Patched `celery/platforms.py:55` AND `celery/worker/state.py:31` to use `sys.platform` instead. WMI query hangs indefinitely on Win11 + Py3.14. Both patches required — the second one blocks worker startup silently.
+- **OSNet not in timm**: `osnet_x1_0` model unavailable. `reid.py` catches `RuntimeError` and falls back to ResNet18.
+- **`lap` package**: Must be installed in venv manually. Ultralytics auto-install targets system Python.
+- **FFmpeg**: Installed via `winget install Gyan.FFmpeg` but not auto-added to PATH. Must export PATH in worker start command.
+- **Zombie celery processes**: Windows doesn't clean up celery workers properly. Always `taskkill /F /IM celery.exe` and check for orphan python.exe processes before starting a new worker.
+- **`--pool=solo`**: Required on Windows (no fork support). Use `-n gpu-worker@ET` for unique node name.
+- **Laptop sleep kills pipeline**: Long inference runs (~1.75hr) fail if laptop sleeps — Redis connection drops. Before starting worker: `cmd.exe //c "powercfg /change standby-timeout-ac 0"`. Redis reconnect resilience added to `celery_app.py` as a safety net (`socket_keepalive`, `retry_on_timeout`).
 
 ## Ground Rules
 
@@ -83,7 +135,7 @@ Every code change follows this process:
 Before modifying any code that touches more than one file or crosses a module boundary, run an **Explore agent** to:
 - Trace all imports, call sites, and dependencies of the code being changed
 - Identify Pydantic schemas, SQLAlchemy models, and frontend TypeScript types that must stay in sync
-- Flag any pipeline coupling (detector → classifier → OCR → pipeline → worker → API routes → frontend)
+- Flag any pipeline coupling (detector → pipeline → worker → API routes → frontend)
 - Report findings before writing code
 
 **Skip conditions**: Single-file cosmetic changes, adding new isolated files with no existing dependents.
@@ -99,7 +151,7 @@ After any significant change, kick off **two background agents in parallel**:
 - Type consistency across backend schemas ↔ models ↔ frontend types
 - Import validity — no broken references
 - API contract alignment (FastAPI route responses match Pydantic schemas match frontend `api.ts` calls)
-- Pipeline data flow integrity (Detection → PlayerInfo → GameEvent → StatEvent → ClipResponse)
+- Pipeline data flow integrity (Detection → PlayerInfo → BasketballEvent → Highlight/Stat)
 - Flag issues found; fix before moving on
 
 **Documentation Agent:**
@@ -112,16 +164,15 @@ After any significant change, kick off **two background agents in parallel**:
 Changes in these areas have high blast radius — always run impact analysis:
 
 ```
-backend/app/models/*        → schemas, routes, workers, frontend types
-backend/app/schemas/*       → routes, frontend api.ts, frontend types
+backend/app/models/*            → schemas, routes, workers, frontend types
+backend/app/schemas/*           → routes, frontend api.ts, frontend types
 backend/app/services/inference/* → pipeline.py, workers/tasks.py
-backend/app/workers/tasks.py    → routes/uploads.py (trigger endpoint)
+backend/app/workers/tasks.py    → routes/videos.py (trigger endpoint)
 frontend/src/types/index.ts     → all frontend components + api.ts
 frontend/src/lib/api.ts         → all pages + components that fetch data
 docker-compose.yml              → all services, env vars, STORAGE_BASE_PATH
-backend/app/services/storage/*  → uploads, clip export, any file I/O (local filesystem)
-backend/app/models/roster.py    → schemas/roster.py, routes/roster.py, workers/tasks.py
-backend/app/services/inference/reid.py → pipeline.py, routes/roster.py
+backend/app/services/video/*    → uploads, clip export, remote storage (SCP)
+backend/app/services/inference/reid.py → pipeline.py, routes/profiles.py
 ```
 
 ### Commit Discipline

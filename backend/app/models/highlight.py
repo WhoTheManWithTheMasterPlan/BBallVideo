@@ -8,16 +8,18 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 
-class Stat(Base):
-    __tablename__ = "stats"
+class Highlight(Base):
+    __tablename__ = "highlights"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("processing_jobs.id"))
     event_type: Mapped[str] = mapped_column(String(50))  # made_basket, steal, assist
-    timestamp: Mapped[float] = mapped_column(Float)
-    court_x: Mapped[float | None] = mapped_column(Float, nullable=True)
-    court_y: Mapped[float | None] = mapped_column(Float, nullable=True)
+    start_time: Mapped[float] = mapped_column(Float)
+    end_time: Mapped[float] = mapped_column(Float)
+    file_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    thumbnail_file_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    job: Mapped["ProcessingJob"] = relationship(back_populates="stats")
+    job: Mapped["ProcessingJob"] = relationship(back_populates="highlights")

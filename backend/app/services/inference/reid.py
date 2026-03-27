@@ -40,8 +40,10 @@ class ReIDExtractor:
         try:
             import timm
             self.model = timm.create_model(model_name, pretrained=True, num_classes=0)
-        except ImportError:
+        except (ImportError, RuntimeError) as e:
             # Fallback: use torchvision ResNet18 as feature extractor
+            # RuntimeError: timm installed but model not available (e.g. osnet_x1_0)
+            logger.warning(f"OSNet unavailable ({e}), falling back to ResNet18")
             from torchvision.models import resnet18, ResNet18_Weights
             model = resnet18(weights=ResNet18_Weights.DEFAULT)
             # Remove classification head, keep feature extractor
@@ -180,9 +182,31 @@ class ReIDMatcher:
 
         logger.info(f"Loaded {len(self.roster_embeddings)} player embeddings for matching")
 
+    def load_profile(self, embeddings: list[np.ndarray]):
+        """
+        Load target profile embeddings for matching.
+        Used in player-centric mode — just checks if a detected player IS the target.
+
+        Args:
+            embeddings: list of numpy embedding arrays from profile photos
+        """
+        self.roster_embeddings.clear()
+        self.roster_info.clear()
+
+        for i, emb in enumerate(embeddings):
+            key = f"profile_{i}"
+            self.roster_embeddings[key] = emb
+            self.roster_info[key] = {
+                "name": "target",
+                "jersey_number": None,
+                "team_name": None,
+            }
+
+        logger.info(f"Loaded {len(self.roster_embeddings)} profile embeddings for target matching")
+
     def match(self, query_embedding: np.ndarray) -> ReIDMatch | None:
         """
-        Find the best matching roster player for a query embedding.
+        Find the best matching player for a query embedding.
 
         Returns ReIDMatch if confidence > threshold, else None.
         """

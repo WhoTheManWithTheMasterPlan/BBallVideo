@@ -1,53 +1,31 @@
 import uuid
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.stat import StatEvent
-from app.schemas.stat import StatEventResponse
+from app.models.job import ProcessingJob
+from app.models.stat import Stat
+from app.schemas.stat import StatResponse
 
 router = APIRouter()
 
 
-@router.get("/game/{game_id}", response_model=list[StatEventResponse])
-async def get_game_stats(
-    game_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-):
+@router.get("/job/{job_id}", response_model=list[StatResponse])
+async def list_stats_by_job(job_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(StatEvent).where(StatEvent.game_id == game_id).order_by(StatEvent.timestamp)
+        select(Stat).where(Stat.job_id == job_id).order_by(Stat.timestamp)
     )
     return result.scalars().all()
 
 
-@router.get("/game/{game_id}/summary")
-async def get_game_summary(
-    game_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-):
-    """Aggregate stats for a game — points, turnovers, etc. by team."""
+@router.get("/profile/{profile_id}/summary")
+async def profile_stats_summary(profile_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(StatEvent).where(StatEvent.game_id == game_id)
+        select(Stat.event_type, func.count(Stat.id))
+        .join(ProcessingJob)
+        .where(ProcessingJob.profile_id == profile_id)
+        .group_by(Stat.event_type)
     )
-    events = result.scalars().all()
-
-    summary: dict = {}
-    for event in events:
-        team = event.team or "unknown"
-        if team not in summary:
-            summary[team] = {"points": 0, "turnovers": 0, "made_shots": 0, "missed_shots": 0}
-
-        if event.event_type == "made_2pt":
-            summary[team]["points"] += 2
-            summary[team]["made_shots"] += 1
-        elif event.event_type == "made_3pt":
-            summary[team]["points"] += 3
-            summary[team]["made_shots"] += 1
-        elif event.event_type == "miss":
-            summary[team]["missed_shots"] += 1
-        elif event.event_type == "turnover":
-            summary[team]["turnovers"] += 1
-
-    return {"game_id": str(game_id), "teams": summary}
+    return {row[0]: row[1] for row in result.all()}
