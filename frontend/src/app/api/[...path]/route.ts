@@ -23,16 +23,7 @@ export async function PUT(request: NextRequest, { params }: { params: { path: st
 
 async function proxy(request: NextRequest, pathSegments: string[]) {
   const url = new URL(request.url);
-  // Cloudflare strips trailing slashes via 308 redirect before we see the request.
-  // FastAPI expects trailing slashes on collection endpoints.
-  // Re-add trailing slash unless the path has a file extension or UUID-like final segment.
-  let pathname = url.pathname;
-  const lastSegment = pathSegments[pathSegments.length - 1] || "";
-  const looksLikeResource = lastSegment.includes(".") || lastSegment.includes("-");
-  if (!pathname.endsWith("/") && !looksLikeResource) {
-    pathname += "/";
-  }
-  const targetUrl = `${BACKEND_URL}${pathname}${url.search}`;
+  const targetUrl = `${BACKEND_URL}${url.pathname}${url.search}`;
 
   const headers = new Headers();
   request.headers.forEach((value, key) => {

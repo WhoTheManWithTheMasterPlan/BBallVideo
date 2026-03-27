@@ -13,6 +13,7 @@ router = APIRouter()
 
 
 @router.post("/", response_model=ProfileResponse)
+@router.post("", response_model=ProfileResponse)
 async def create_profile(data: ProfileCreate, db: AsyncSession = Depends(get_db)):
     profile = Profile(
         user_id=data.user_id,
@@ -28,6 +29,7 @@ async def create_profile(data: ProfileCreate, db: AsyncSession = Depends(get_db)
 
 
 @router.get("/", response_model=list[ProfileResponse])
+@router.get("", response_model=list[ProfileResponse])
 async def list_profiles(user_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Profile).where(Profile.user_id == user_id).order_by(Profile.created_at.desc())

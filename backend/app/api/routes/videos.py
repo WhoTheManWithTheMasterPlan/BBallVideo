@@ -18,6 +18,7 @@ router = APIRouter()
 
 
 @router.post("/", response_model=VideoResponse)
+@router.post("", response_model=VideoResponse)
 async def create_video(data: VideoCreate, db: AsyncSession = Depends(get_db)):
     # Strip timezone info — DB column is timezone-naive
     game_date = data.game_date.replace(tzinfo=None) if data.game_date else None
@@ -34,6 +35,7 @@ async def create_video(data: VideoCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/", response_model=list[VideoResponse])
+@router.get("", response_model=list[VideoResponse])
 async def list_videos(user_id: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Video).where(Video.user_id == user_id).order_by(Video.created_at.desc())
