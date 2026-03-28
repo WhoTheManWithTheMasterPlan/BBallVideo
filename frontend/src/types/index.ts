@@ -1,9 +1,20 @@
+export interface TeamPhoto {
+  id: string;
+  team_id: string;
+  file_key: string;
+  is_primary: boolean;
+  has_embedding: boolean;
+  created_at: string;
+}
+
 export interface Team {
   id: string;
   profile_id: string;
   name: string;
+  jersey_number: number | null;
   color_primary: string | null;
   color_secondary: string | null;
+  photos: TeamPhoto[];
   created_at: string;
 }
 

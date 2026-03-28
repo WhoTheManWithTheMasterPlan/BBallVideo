@@ -67,34 +67,20 @@ export default function DashboardPage() {
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  {profile.photos.length > 0 ? (
-                    <img
-                      src={api.files.getUrl(profile.photos[0].file_key)}
-                      alt={profile.name}
-                      className="w-12 h-12 rounded-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-12 h-12 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 text-lg">
-                      {profile.name[0]}
-                    </div>
-                  )}
+                  <div className="w-12 h-12 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 text-lg">
+                    {profile.name[0]}
+                  </div>
                   <div>
-                    <div className="font-medium">
-                      {profile.name}
-                      {profile.jersey_number !== null && (
-                        <span className="ml-2 text-sm text-gray-400">#{profile.jersey_number}</span>
-                      )}
-                    </div>
+                    <div className="font-medium">{profile.name}</div>
                     <div className="text-xs text-gray-400">
-                      {profile.photos.length} photo{profile.photos.length !== 1 ? "s" : ""}
-                      {profile.team_color_primary && ` · ${profile.team_color_primary}`}
+                      {(profile.teams || []).length} team{(profile.teams || []).length !== 1 ? "s" : ""}
                     </div>
                     <Link
                       href={`/profiles/${profile.id}`}
                       onClick={(e) => e.stopPropagation()}
                       className="text-xs text-orange-400 hover:text-orange-300 mt-1 inline-block"
                     >
-                      Edit Photos
+                      Manage Teams
                     </Link>
                   </div>
                 </div>

@@ -193,23 +193,13 @@ export default function UploadPage() {
                       : "bg-gray-900 border border-gray-700 hover:bg-gray-800"
                   }`}
                 >
-                  {profile.photos.length > 0 ? (
-                    <img
-                      src={api.files.getUrl(profile.photos[0].file_key)}
-                      alt={profile.name}
-                      className="w-14 h-14 rounded-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-14 h-14 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 text-xl">
-                      {profile.name[0]}
-                    </div>
-                  )}
+                  <div className="w-14 h-14 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 text-xl">
+                    {profile.name[0]}
+                  </div>
                   <div>
                     <div className="font-medium">{profile.name}</div>
                     <div className="text-xs text-gray-400">
-                      {profile.photos.length} photo{profile.photos.length !== 1 ? "s" : ""}
-                      {profile.photos.some((p) => p.has_embedding) && " — ReID ready"}
-                      {profile.teams?.length > 0 && ` · ${profile.teams.length} team${profile.teams.length !== 1 ? "s" : ""}`}
+                      {(profile.teams || []).length} team{(profile.teams || []).length !== 1 ? "s" : ""}
                     </div>
                   </div>
                 </button>
@@ -255,11 +245,31 @@ export default function UploadPage() {
                     : "bg-gray-900 border border-gray-700 hover:bg-gray-800"
                 }`}
               >
-                <div>
-                  <div className="font-medium">{team.name}</div>
-                  <div className="text-xs text-gray-400">
-                    {team.color_primary || "No colors set"}
-                    {team.color_secondary && ` / ${team.color_secondary}`}
+                <div className="flex items-center gap-3">
+                  {team.photos?.length > 0 ? (
+                    <img
+                      src={api.files.getUrl(team.photos[0].file_key)}
+                      alt={team.name}
+                      className="w-10 h-10 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 text-sm">
+                      {team.name[0]}
+                    </div>
+                  )}
+                  <div>
+                    <div className="font-medium">
+                      {team.name}
+                      {team.jersey_number !== null && (
+                        <span className="ml-2 text-sm text-gray-400">#{team.jersey_number}</span>
+                      )}
+                    </div>
+                    <div className="text-xs text-gray-400">
+                      {team.color_primary || "No colors"}
+                      {team.color_secondary && ` / ${team.color_secondary}`}
+                      {" · "}
+                      {(team.photos || []).length} photo{(team.photos || []).length !== 1 ? "s" : ""}
+                    </div>
                   </div>
                 </div>
               </button>

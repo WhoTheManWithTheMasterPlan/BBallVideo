@@ -65,32 +65,42 @@ def process_video(self, job_id: str):
         if not profile:
             raise ValueError(f"Profile {job.profile_id} not found")
 
-        # Load profile photo embeddings
+        # Load photo embeddings and team context
+        # Prefer Team photos/colors when team_id is set; fall back to legacy Profile photos/colors
         profile_embeddings = []
-        for photo in profile.photos:
-            if photo.reid_embedding:
-                emb = np.frombuffer(photo.reid_embedding, dtype=np.float32)
-                profile_embeddings.append(emb)
-
-        logger.info(f"Profile '{profile.name}': {len(profile_embeddings)} photo embeddings loaded")
-
-        # Build team color descriptions for CLIP classifier
-        # Prefer Team entity colors; fall back to legacy Profile colors
         team_descriptions = []
         team_names = []
         color_primary = None
         color_secondary = None
+        jersey_number = profile.jersey_number  # legacy fallback
 
         if job.team_id:
             team = session.get(Team, job.team_id)
             if team:
+                # Load team-specific photo embeddings
+                for photo in team.photos:
+                    if photo.reid_embedding:
+                        emb = np.frombuffer(photo.reid_embedding, dtype=np.float32)
+                        profile_embeddings.append(emb)
                 color_primary = team.color_primary
                 color_secondary = team.color_secondary
-                logger.info(f"Using team '{team.name}' colors: {color_primary} / {color_secondary}")
+                if team.jersey_number is not None:
+                    jersey_number = team.jersey_number
+                logger.info(f"Using team '{team.name}': {len(profile_embeddings)} photos, colors={color_primary}/{color_secondary}, jersey={jersey_number}")
 
+        # Fall back to legacy profile photos if no team photos
+        if not profile_embeddings:
+            for photo in profile.photos:
+                if photo.reid_embedding:
+                    emb = np.frombuffer(photo.reid_embedding, dtype=np.float32)
+                    profile_embeddings.append(emb)
+
+        # Fall back to legacy profile colors
         if not color_primary:
             color_primary = profile.team_color_primary
             color_secondary = profile.team_color_secondary
+
+        logger.info(f"Profile '{profile.name}': {len(profile_embeddings)} photo embeddings loaded")
 
         if color_primary:
             team_descriptions.append(f"person wearing {color_primary} jersey")
@@ -133,7 +143,7 @@ def process_video(self, job_id: str):
         pipeline = InferencePipeline(
             hoop_model_path=hoop_model_path,
             profile_embeddings=profile_embeddings if profile_embeddings else None,
-            profile_jersey_number=profile.jersey_number,
+            profile_jersey_number=jersey_number,
             team_descriptions=team_descriptions if team_descriptions else None,
             team_names=team_names if team_names else None,
         )

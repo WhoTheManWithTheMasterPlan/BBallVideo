@@ -46,12 +46,24 @@ export const api = {
   teams: {
     list: (profileId: string) =>
       fetchAPI(`/api/v1/profiles/${profileId}/teams`),
-    create: (profileId: string, data: { name: string; color_primary?: string; color_secondary?: string }) =>
+    create: (profileId: string, data: { name: string; jersey_number?: number; color_primary?: string; color_secondary?: string }) =>
       fetchAPI(`/api/v1/profiles/${profileId}/teams`, { method: "POST", body: JSON.stringify(data) }),
-    update: (profileId: string, teamId: string, data: { name?: string; color_primary?: string; color_secondary?: string }) =>
+    update: (profileId: string, teamId: string, data: { name?: string; jersey_number?: number; color_primary?: string; color_secondary?: string }) =>
       fetchAPI(`/api/v1/profiles/${profileId}/teams/${teamId}`, { method: "PUT", body: JSON.stringify(data) }),
     delete: (profileId: string, teamId: string) =>
       fetchAPI(`/api/v1/profiles/${profileId}/teams/${teamId}`, { method: "DELETE" }),
+    uploadPhoto: async (profileId: string, teamId: string, photo: File) => {
+      const formData = new FormData();
+      formData.append("photo", photo);
+      const res = await fetch(`${API_URL}/api/v1/profiles/${profileId}/teams/${teamId}/photos`, {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+      return res.json();
+    },
+    deletePhoto: (profileId: string, teamId: string, photoId: string) =>
+      fetchAPI(`/api/v1/profiles/${profileId}/teams/${teamId}/photos/${photoId}`, { method: "DELETE" }),
   },
   videos: {
     list: (userId: string) =>

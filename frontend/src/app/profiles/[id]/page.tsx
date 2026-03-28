@@ -1,29 +1,34 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import type { Profile, ProfilePhoto, Team } from "@/types";
+import type { Profile, Team, TeamPhoto } from "@/types";
 
 export default function ProfileDetailPage() {
   const params = useParams();
-  const router = useRouter();
   const profileId = params.id as string;
 
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [deleting, setDeleting] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Team form state
+  // Team form
   const [showTeamForm, setShowTeamForm] = useState(false);
   const [editingTeam, setEditingTeam] = useState<Team | null>(null);
   const [teamName, setTeamName] = useState("");
+  const [teamJersey, setTeamJersey] = useState("");
   const [teamColorPrimary, setTeamColorPrimary] = useState("");
   const [teamColorSecondary, setTeamColorSecondary] = useState("");
   const [savingTeam, setSavingTeam] = useState(false);
   const [deletingTeam, setDeletingTeam] = useState<string | null>(null);
+
+  // Photo management
+  const [uploadingPhotoTeamId, setUploadingPhotoTeamId] = useState<string | null>(null);
+  const [deletingPhoto, setDeletingPhoto] = useState<string | null>(null);
+
+  // Expanded team
+  const [expandedTeamId, setExpandedTeamId] = useState<string | null>(null);
 
   const loadProfile = () => {
     api.profiles.get(profileId).then((p) => setProfile(p as Profile)).catch(() => {});
@@ -33,46 +38,17 @@ export default function ProfileDetailPage() {
     loadProfile();
   }, [profileId]);
 
-  const handleAddPhotos = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    setError(null);
-    setUploading(true);
-
-    try {
-      for (const file of Array.from(files)) {
-        await api.profiles.uploadPhoto(profileId, file);
-      }
-      loadProfile();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to upload photo");
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const handleDeletePhoto = async (photoId: string) => {
-    setDeleting(photoId);
-    setError(null);
-
-    try {
-      await api.profiles.deletePhoto(profileId, photoId);
-      loadProfile();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete photo");
-    } finally {
-      setDeleting(null);
-    }
-  };
-
   const openTeamForm = (team?: Team) => {
     if (team) {
       setEditingTeam(team);
       setTeamName(team.name);
+      setTeamJersey(team.jersey_number !== null ? String(team.jersey_number) : "");
       setTeamColorPrimary(team.color_primary || "");
       setTeamColorSecondary(team.color_secondary || "");
     } else {
       setEditingTeam(null);
       setTeamName("");
+      setTeamJersey("");
       setTeamColorPrimary("");
       setTeamColorSecondary("");
     }
@@ -85,18 +61,17 @@ export default function ProfileDetailPage() {
     setSavingTeam(true);
 
     try {
+      const data = {
+        name: teamName.trim(),
+        jersey_number: teamJersey ? parseInt(teamJersey) : undefined,
+        color_primary: teamColorPrimary || undefined,
+        color_secondary: teamColorSecondary || undefined,
+      };
+
       if (editingTeam) {
-        await api.teams.update(profileId, editingTeam.id, {
-          name: teamName.trim(),
-          color_primary: teamColorPrimary || undefined,
-          color_secondary: teamColorSecondary || undefined,
-        });
+        await api.teams.update(profileId, editingTeam.id, data);
       } else {
-        await api.teams.create(profileId, {
-          name: teamName.trim(),
-          color_primary: teamColorPrimary || undefined,
-          color_secondary: teamColorSecondary || undefined,
-        });
+        await api.teams.create(profileId, data);
       }
       setShowTeamForm(false);
       loadProfile();
@@ -110,9 +85,9 @@ export default function ProfileDetailPage() {
   const handleDeleteTeam = async (teamId: string) => {
     setDeletingTeam(teamId);
     setError(null);
-
     try {
       await api.teams.delete(profileId, teamId);
+      if (expandedTeamId === teamId) setExpandedTeamId(null);
       loadProfile();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete team");
@@ -121,9 +96,40 @@ export default function ProfileDetailPage() {
     }
   };
 
+  const handleAddPhotos = async (teamId: string, files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setError(null);
+    setUploadingPhotoTeamId(teamId);
+    try {
+      for (const file of Array.from(files)) {
+        await api.teams.uploadPhoto(profileId, teamId, file);
+      }
+      loadProfile();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload photo");
+    } finally {
+      setUploadingPhotoTeamId(null);
+    }
+  };
+
+  const handleDeletePhoto = async (teamId: string, photoId: string) => {
+    setDeletingPhoto(photoId);
+    setError(null);
+    try {
+      await api.teams.deletePhoto(profileId, teamId, photoId);
+      loadProfile();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete photo");
+    } finally {
+      setDeletingPhoto(null);
+    }
+  };
+
   if (!profile) {
     return <div className="max-w-2xl mx-auto p-8 text-gray-400">Loading...</div>;
   }
+
+  const teams = profile.teams || [];
 
   return (
     <div className="max-w-2xl mx-auto p-8">
@@ -131,32 +137,7 @@ export default function ProfileDetailPage() {
         &larr; Back to Dashboard
       </Link>
 
-      <div className="flex items-center gap-4 mb-8">
-        {profile.photos.length > 0 ? (
-          <img
-            src={api.files.getUrl(profile.photos[0].file_key)}
-            alt={profile.name}
-            className="w-16 h-16 rounded-full object-cover"
-          />
-        ) : (
-          <div className="w-16 h-16 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 text-2xl">
-            {profile.name[0]}
-          </div>
-        )}
-        <div>
-          <h1 className="text-3xl font-bold">
-            {profile.name}
-            {profile.jersey_number !== null && (
-              <span className="ml-2 text-xl text-gray-400">#{profile.jersey_number}</span>
-            )}
-          </h1>
-          {profile.teams?.length > 0 && (
-            <p className="text-sm text-gray-400">
-              {profile.teams?.map((t) => t.name).join(", ")}
-            </p>
-          )}
-        </div>
-      </div>
+      <h1 className="text-3xl font-bold mb-8">{profile.name}</h1>
 
       {error && (
         <div className="p-3 mb-6 bg-red-900/50 border border-red-700 rounded-lg text-red-300 text-sm">
@@ -165,11 +146,9 @@ export default function ProfileDetailPage() {
       )}
 
       {/* Teams Section */}
-      <section className="mb-10">
+      <section>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold">
-            Teams ({(profile.teams || []).length})
-          </h2>
+          <h2 className="text-xl font-semibold">Teams ({teams.length})</h2>
           <button
             onClick={() => openTeamForm()}
             className="px-4 py-2 bg-orange-600 hover:bg-orange-700 rounded-lg font-medium text-sm transition-colors"
@@ -179,9 +158,10 @@ export default function ProfileDetailPage() {
         </div>
 
         <p className="text-gray-400 text-xs mb-4">
-          Add teams this player plays for. Each team has its own jersey colors used for AI identification.
+          Each team has its own jersey number, colors, and photos for AI identification.
         </p>
 
+        {/* Team Form */}
         {showTeamForm && (
           <div className="p-4 mb-4 bg-gray-900 rounded-lg border border-gray-700 space-y-3">
             <div>
@@ -192,6 +172,18 @@ export default function ProfileDetailPage() {
                 type="text"
                 placeholder="e.g. Lincoln Varsity"
                 className="w-full px-3 py-2 bg-gray-800 rounded border border-gray-600 focus:border-orange-500 focus:outline-none text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Jersey Number</label>
+              <input
+                value={teamJersey}
+                onChange={(e) => setTeamJersey(e.target.value)}
+                type="number"
+                min="0"
+                max="99"
+                placeholder="e.g. 23"
+                className="w-32 px-3 py-2 bg-gray-800 rounded border border-gray-600 focus:border-orange-500 focus:outline-none text-sm"
               />
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -234,100 +226,135 @@ export default function ProfileDetailPage() {
           </div>
         )}
 
-        {(profile.teams || []).length === 0 && !showTeamForm ? (
+        {/* Team List */}
+        {teams.length === 0 && !showTeamForm ? (
           <div className="text-center py-8 text-gray-500 bg-gray-900 rounded-lg border border-gray-700">
             <p>No teams yet.</p>
-            <p className="text-sm mt-1">Add a team so the AI knows what jersey colors to look for.</p>
+            <p className="text-sm mt-1">Add a team with jersey number, colors, and photos.</p>
           </div>
         ) : (
-          <div className="space-y-2">
-            {(profile.teams || []).map((team) => (
-              <div
-                key={team.id}
-                className="flex items-center justify-between p-3 bg-gray-900 rounded-lg border border-gray-700"
-              >
-                <div>
-                  <div className="font-medium text-sm">{team.name}</div>
-                  <div className="text-xs text-gray-400">
-                    {team.color_primary || "No colors set"}
-                    {team.color_secondary && ` / ${team.color_secondary}`}
-                  </div>
-                </div>
-                <div className="flex gap-2">
+          <div className="space-y-3">
+            {teams.map((team) => {
+              const isExpanded = expandedTeamId === team.id;
+              const teamPhotos: TeamPhoto[] = team.photos || [];
+              return (
+                <div key={team.id} className="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
+                  {/* Team Header */}
                   <button
-                    onClick={() => openTeamForm(team)}
-                    className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs transition-colors"
+                    onClick={() => setExpandedTeamId(isExpanded ? null : team.id)}
+                    className="w-full flex items-center justify-between p-4 text-left hover:bg-gray-800 transition-colors"
                   >
-                    Edit
+                    <div className="flex items-center gap-3">
+                      {teamPhotos.length > 0 ? (
+                        <img
+                          src={api.files.getUrl(teamPhotos[0].file_key)}
+                          alt={team.name}
+                          className="w-10 h-10 rounded-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-full bg-gray-700 flex items-center justify-center text-gray-400 text-sm">
+                          {team.name[0]}
+                        </div>
+                      )}
+                      <div>
+                        <div className="font-medium text-sm">
+                          {team.name}
+                          {team.jersey_number !== null && (
+                            <span className="ml-2 text-gray-400">#{team.jersey_number}</span>
+                          )}
+                        </div>
+                        <div className="text-xs text-gray-400">
+                          {team.color_primary || "No colors"}
+                          {team.color_secondary && ` / ${team.color_secondary}`}
+                          {" · "}
+                          {teamPhotos.length} photo{teamPhotos.length !== 1 ? "s" : ""}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="text-gray-500 text-xs">{isExpanded ? "▲" : "▼"}</span>
                   </button>
-                  <button
-                    onClick={() => handleDeleteTeam(team.id)}
-                    disabled={deletingTeam === team.id}
-                    className="px-2 py-1 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 rounded text-xs transition-colors"
-                  >
-                    {deletingTeam === team.id ? "..." : "Delete"}
-                  </button>
+
+                  {/* Expanded Team Detail */}
+                  {isExpanded && (
+                    <div className="px-4 pb-4 border-t border-gray-700 pt-3 space-y-4">
+                      {/* Actions */}
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => openTeamForm(team)}
+                          className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs transition-colors"
+                        >
+                          Edit Team
+                        </button>
+                        <button
+                          onClick={() => handleDeleteTeam(team.id)}
+                          disabled={deletingTeam === team.id}
+                          className="px-3 py-1 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 rounded text-xs transition-colors"
+                        >
+                          {deletingTeam === team.id ? "Deleting..." : "Delete Team"}
+                        </button>
+                      </div>
+
+                      {/* Photos */}
+                      <div>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm font-medium">Photos ({teamPhotos.length})</span>
+                          <label className="px-3 py-1 bg-orange-600 hover:bg-orange-700 rounded text-xs font-medium cursor-pointer transition-colors">
+                            {uploadingPhotoTeamId === team.id ? "Uploading..." : "+ Add Photos"}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              multiple
+                              className="hidden"
+                              disabled={uploadingPhotoTeamId === team.id}
+                              onChange={(e) => {
+                                handleAddPhotos(team.id, e.target.files);
+                                e.target.value = "";
+                              }}
+                            />
+                          </label>
+                        </div>
+
+                        <p className="text-gray-400 text-xs mb-3">
+                          Upload photos of the player in this team&apos;s uniform. More photos = better AI identification.
+                        </p>
+
+                        {teamPhotos.length === 0 ? (
+                          <div className="text-center py-6 text-gray-500 bg-gray-800 rounded-lg text-sm">
+                            No photos yet. Upload photos in this team&apos;s jersey.
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-3 gap-3">
+                            {teamPhotos.map((photo) => (
+                              <div key={photo.id} className="relative group">
+                                <img
+                                  src={api.files.getUrl(photo.file_key)}
+                                  alt="Player photo"
+                                  className="w-full aspect-square object-cover rounded-lg border border-gray-700"
+                                />
+                                <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent rounded-b-lg opacity-0 group-hover:opacity-100 transition-opacity">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs text-gray-300">
+                                      {photo.has_embedding ? "Embedded" : "No embedding"}
+                                    </span>
+                                    <button
+                                      onClick={() => handleDeletePhoto(team.id, photo.id)}
+                                      disabled={deletingPhoto === photo.id}
+                                      className="px-2 py-1 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 rounded text-xs transition-colors"
+                                    >
+                                      {deletingPhoto === photo.id ? "..." : "Delete"}
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Photos Section */}
-      <section>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold">
-            Photos ({profile.photos.length})
-          </h2>
-          <label className="px-4 py-2 bg-orange-600 hover:bg-orange-700 rounded-lg font-medium text-sm cursor-pointer transition-colors">
-            {uploading ? "Uploading..." : "+ Add Photos"}
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              disabled={uploading}
-              onChange={(e) => handleAddPhotos(e.target.files)}
-            />
-          </label>
-        </div>
-
-        <p className="text-gray-400 text-xs mb-4">
-          More photos from different angles and lighting = better AI identification.
-          The AI uses these to match your player in game footage.
-        </p>
-
-        {profile.photos.length === 0 ? (
-          <div className="text-center py-12 text-gray-500 bg-gray-900 rounded-lg border border-gray-700">
-            <p>No photos yet.</p>
-            <p className="text-sm mt-1">Upload photos so the AI can identify this player.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-3 gap-4">
-            {profile.photos.map((photo: ProfilePhoto) => (
-              <div key={photo.id} className="relative group">
-                <img
-                  src={api.files.getUrl(photo.file_key)}
-                  alt={`${profile.name} photo`}
-                  className="w-full aspect-square object-cover rounded-lg border border-gray-700"
-                />
-                <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80 to-transparent rounded-b-lg opacity-0 group-hover:opacity-100 transition-opacity">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-gray-300">
-                      {photo.has_embedding ? "Embedded" : "No embedding"}
-                    </span>
-                    <button
-                      onClick={() => handleDeletePhoto(photo.id)}
-                      disabled={deleting === photo.id}
-                      className="px-2 py-1 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 rounded text-xs transition-colors"
-                    >
-                      {deleting === photo.id ? "..." : "Delete"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>

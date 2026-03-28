@@ -10,10 +10,7 @@ const USER_ID = "default";
 export default function NewProfilePage() {
   const router = useRouter();
   const [name, setName] = useState("");
-  const [jerseyNumber, setJerseyNumber] = useState("");
-  const [photos, setPhotos] = useState<File[]>([]);
   const [creating, setCreating] = useState(false);
-  const [uploadingPhotos, setUploadingPhotos] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async () => {
@@ -25,21 +22,12 @@ export default function NewProfilePage() {
       const profile = (await api.profiles.create({
         name: name.trim(),
         user_id: USER_ID,
-        jersey_number: jerseyNumber ? parseInt(jerseyNumber) : undefined,
       })) as Profile;
-
-      if (photos.length > 0) {
-        setUploadingPhotos(true);
-        for (const photo of photos) {
-          await api.profiles.uploadPhoto(profile.id, photo);
-        }
-      }
 
       router.push(`/profiles/${profile.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create profile");
       setCreating(false);
-      setUploadingPhotos(false);
     }
   };
 
@@ -66,68 +54,16 @@ export default function NewProfilePage() {
           />
         </div>
 
-        <div>
-          <label className="block text-sm font-medium mb-2">Jersey Number</label>
-          <input
-            value={jerseyNumber}
-            onChange={(e) => setJerseyNumber(e.target.value)}
-            type="number"
-            min="0"
-            max="99"
-            placeholder="e.g. 23"
-            className="w-32 px-4 py-2 bg-gray-900 rounded-lg border border-gray-700 focus:border-orange-500 focus:outline-none"
-          />
-          <p className="text-gray-500 text-xs mt-1">Helps the AI confirm player identity via jersey OCR.</p>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-2">Player Photos</label>
-          <p className="text-gray-400 text-xs mb-3">
-            Upload clear photos of the player. These are used for AI identification in game footage.
-            More photos = better accuracy.
-          </p>
-          <label className="inline-block px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm cursor-pointer transition-colors">
-            + Add Photos
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                const newFiles = Array.from(e.target.files || []);
-                if (newFiles.length > 0) setPhotos((prev) => [...prev, ...newFiles]);
-                e.target.value = "";
-              }}
-            />
-          </label>
-          {photos.length > 0 && (
-            <div className="mt-3 space-y-2">
-              {photos.map((file, i) => (
-                <div key={i} className="flex items-center justify-between p-2 bg-gray-900 rounded-lg border border-gray-700 text-sm">
-                  <span className="text-gray-300 truncate mr-3">{file.name}</span>
-                  <button
-                    type="button"
-                    onClick={() => setPhotos((prev) => prev.filter((_, j) => j !== i))}
-                    className="text-red-400 hover:text-red-300 text-xs shrink-0"
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
         <button
           onClick={handleSubmit}
           disabled={!name.trim() || creating}
           className="w-full py-3 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-700 rounded-lg font-medium transition-colors"
         >
-          {uploadingPhotos ? "Uploading photos..." : creating ? "Creating..." : "Create Profile"}
+          {creating ? "Creating..." : "Create Profile"}
         </button>
 
         <p className="text-gray-500 text-xs text-center">
-          After creating the profile, you can add teams and jersey colors on the next page.
+          Next, you&apos;ll add teams with jersey numbers, colors, and photos.
         </p>
       </div>
     </div>
