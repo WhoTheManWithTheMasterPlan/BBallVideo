@@ -209,7 +209,7 @@ export default function UploadPage() {
                     <div className="text-xs text-gray-400">
                       {profile.photos.length} photo{profile.photos.length !== 1 ? "s" : ""}
                       {profile.photos.some((p) => p.has_embedding) && " — ReID ready"}
-                      {profile.teams.length > 0 && ` · ${profile.teams.length} team${profile.teams.length !== 1 ? "s" : ""}`}
+                      {profile.teams?.length > 0 && ` · ${profile.teams.length} team${profile.teams.length !== 1 ? "s" : ""}`}
                     </div>
                   </div>
                 </button>

@@ -150,9 +150,9 @@ export default function ProfileDetailPage() {
               <span className="ml-2 text-xl text-gray-400">#{profile.jersey_number}</span>
             )}
           </h1>
-          {profile.teams.length > 0 && (
+          {profile.teams?.length > 0 && (
             <p className="text-sm text-gray-400">
-              {profile.teams.map((t) => t.name).join(", ")}
+              {profile.teams?.map((t) => t.name).join(", ")}
             </p>
           )}
         </div>
@@ -168,7 +168,7 @@ export default function ProfileDetailPage() {
       <section className="mb-10">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold">
-            Teams ({profile.teams.length})
+            Teams ({(profile.teams || []).length})
           </h2>
           <button
             onClick={() => openTeamForm()}
@@ -234,14 +234,14 @@ export default function ProfileDetailPage() {
           </div>
         )}
 
-        {profile.teams.length === 0 && !showTeamForm ? (
+        {(profile.teams || []).length === 0 && !showTeamForm ? (
           <div className="text-center py-8 text-gray-500 bg-gray-900 rounded-lg border border-gray-700">
             <p>No teams yet.</p>
             <p className="text-sm mt-1">Add a team so the AI knows what jersey colors to look for.</p>
           </div>
         ) : (
           <div className="space-y-2">
-            {profile.teams.map((team) => (
+            {(profile.teams || []).map((team) => (
               <div
                 key={team.id}
                 className="flex items-center justify-between p-3 bg-gray-900 rounded-lg border border-gray-700"
