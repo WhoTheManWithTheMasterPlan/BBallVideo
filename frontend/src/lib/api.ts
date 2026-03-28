@@ -95,7 +95,7 @@ export const api = {
       initForm.append("total_size", file.size.toString());
 
       const initRes = await fetch(
-        `${API_URL}/api/v1/videos/${videoId}/upload/init`,
+        `${API_URL}/api/v1/videos/${videoId}/chunked-upload/init`,
         { method: "POST", body: initForm },
       );
       if (!initRes.ok) {
@@ -116,7 +116,7 @@ export const api = {
         chunkForm.append("chunk", blob, `chunk_${i}`);
 
         const chunkRes = await fetch(
-          `${API_URL}/api/v1/videos/${videoId}/upload/chunk`,
+          `${API_URL}/api/v1/videos/${videoId}/chunked-upload/chunk`,
           { method: "POST", body: chunkForm },
         );
         if (!chunkRes.ok) {
@@ -134,7 +134,7 @@ export const api = {
       completeForm.append("upload_id", upload_id);
 
       const completeRes = await fetch(
-        `${API_URL}/api/v1/videos/${videoId}/upload/complete`,
+        `${API_URL}/api/v1/videos/${videoId}/chunked-upload/complete`,
         { method: "POST", body: completeForm },
       );
       if (!completeRes.ok) {

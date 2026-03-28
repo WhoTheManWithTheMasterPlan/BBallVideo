@@ -91,7 +91,7 @@ async def upload_video_file(
 # --- Chunked upload (for files >100MB behind Cloudflare) ---
 
 
-@router.post("/{video_id}/upload/init")
+@router.post("/{video_id}/chunked-upload/init")
 async def init_chunked_upload(
     video_id: uuid.UUID,
     filename: str = Form(...),
@@ -131,7 +131,7 @@ async def init_chunked_upload(
     return {"upload_id": upload_id, "total_chunks": total_chunks}
 
 
-@router.post("/{video_id}/upload/chunk")
+@router.post("/{video_id}/chunked-upload/chunk")
 async def upload_chunk(
     video_id: uuid.UUID,
     upload_id: str = Form(...),
@@ -161,7 +161,7 @@ async def upload_chunk(
     }
 
 
-@router.post("/{video_id}/upload/complete")
+@router.post("/{video_id}/chunked-upload/complete")
 async def complete_chunked_upload(
     video_id: uuid.UUID,
     upload_id: str = Form(...),

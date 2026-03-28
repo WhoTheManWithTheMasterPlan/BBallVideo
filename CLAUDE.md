@@ -103,9 +103,9 @@ POST   /api/v1/videos/                      — Create video record
 GET    /api/v1/videos/?user_id=             — List videos
 GET    /api/v1/videos/{id}                  — Get video
 POST   /api/v1/videos/{id}/upload           — Upload video file (multipart, <50MB)
-POST   /api/v1/videos/{id}/upload/init     — Init chunked upload (Form: filename, total_chunks, total_size)
-POST   /api/v1/videos/{id}/upload/chunk    — Upload one chunk (Form: upload_id, chunk_index + File: chunk)
-POST   /api/v1/videos/{id}/upload/complete — Reassemble chunks (Form: upload_id)
+POST   /api/v1/videos/{id}/chunked-upload/init     — Init chunked upload (Form: filename, total_chunks, total_size)
+POST   /api/v1/videos/{id}/chunked-upload/chunk    — Upload one chunk (Form: upload_id, chunk_index + File: chunk)
+POST   /api/v1/videos/{id}/chunked-upload/complete — Reassemble chunks (Form: upload_id)
 POST   /api/v1/videos/{id}/process          — Trigger processing (Form: profile_id)
 
 GET    /api/v1/jobs/{id}                    — Get job status
