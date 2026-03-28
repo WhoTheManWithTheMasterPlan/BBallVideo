@@ -43,6 +43,16 @@ export const api = {
     deletePhoto: (profileId: string, photoId: string) =>
       fetchAPI(`/api/v1/profiles/${profileId}/photos/${photoId}`, { method: "DELETE" }),
   },
+  teams: {
+    list: (profileId: string) =>
+      fetchAPI(`/api/v1/profiles/${profileId}/teams`),
+    create: (profileId: string, data: { name: string; color_primary?: string; color_secondary?: string }) =>
+      fetchAPI(`/api/v1/profiles/${profileId}/teams`, { method: "POST", body: JSON.stringify(data) }),
+    update: (profileId: string, teamId: string, data: { name?: string; color_primary?: string; color_secondary?: string }) =>
+      fetchAPI(`/api/v1/profiles/${profileId}/teams/${teamId}`, { method: "PUT", body: JSON.stringify(data) }),
+    delete: (profileId: string, teamId: string) =>
+      fetchAPI(`/api/v1/profiles/${profileId}/teams/${teamId}`, { method: "DELETE" }),
+  },
   videos: {
     list: (userId: string) =>
       fetchAPI(`/api/v1/videos/?user_id=${userId}`),
@@ -144,9 +154,10 @@ export const api = {
 
       return completeRes.json();
     },
-    triggerProcessing: async (videoId: string, profileId: string) => {
+    triggerProcessing: async (videoId: string, profileId: string, teamId?: string) => {
       const formData = new FormData();
       formData.append("profile_id", profileId);
+      if (teamId) formData.append("team_id", teamId);
       const res = await fetch(`${API_URL}/api/v1/videos/${videoId}/process`, {
         method: "POST",
         body: formData,

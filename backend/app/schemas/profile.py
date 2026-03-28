@@ -3,6 +3,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.schemas.team import TeamResponse
+
 
 class ProfileCreate(BaseModel):
     name: str
@@ -30,6 +32,7 @@ class ProfileResponse(BaseModel):
     team_color_primary: str | None
     team_color_secondary: str | None
     photos: list[ProfilePhotoResponse]
+    teams: list[TeamResponse]
     created_at: datetime
 
     model_config = {"from_attributes": True}

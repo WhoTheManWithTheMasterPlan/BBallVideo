@@ -14,6 +14,7 @@ class ProcessingJob(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     video_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("videos.id"))
     profile_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("profiles.id"))
+    team_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="pending")  # pending, processing, completed, failed
     celery_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -25,5 +26,6 @@ class ProcessingJob(Base):
 
     video: Mapped["Video"] = relationship(back_populates="jobs")
     profile: Mapped["Profile"] = relationship(back_populates="jobs")
+    team: Mapped["Team | None"] = relationship(back_populates="jobs")
     highlights: Mapped[list["Highlight"]] = relationship(back_populates="job", lazy="selectin")
     stats: Mapped[list["Stat"]] = relationship(back_populates="job", lazy="selectin")

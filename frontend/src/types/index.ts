@@ -1,3 +1,12 @@
+export interface Team {
+  id: string;
+  profile_id: string;
+  name: string;
+  color_primary: string | null;
+  color_secondary: string | null;
+  created_at: string;
+}
+
 export interface Profile {
   id: string;
   name: string;
@@ -5,6 +14,7 @@ export interface Profile {
   team_color_primary: string | null;
   team_color_secondary: string | null;
   photos: ProfilePhoto[];
+  teams: Team[];
   created_at: string;
 }
 
@@ -31,6 +41,7 @@ export interface ProcessingJob {
   id: string;
   video_id: string;
   profile_id: string;
+  team_id: string | null;
   status: "pending" | "processing" | "completed" | "failed";
   celery_task_id: string | null;
   started_at: string | null;

@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from contextlib import asynccontextmanager
 
-from app.api.routes import profiles, videos, jobs, highlights, stats, files
+from app.api.routes import profiles, teams, videos, jobs, highlights, stats, files
 from app.core.config import settings
 from app.core.database import engine, Base
 import app.models  # noqa: F401 — register all models with Base.metadata
@@ -33,6 +33,7 @@ app.add_middleware(
 )
 
 app.include_router(profiles.router, prefix="/api/v1/profiles", tags=["profiles"])
+app.include_router(teams.router, prefix="/api/v1/profiles", tags=["teams"])
 app.include_router(videos.router, prefix="/api/v1/videos", tags=["videos"])
 app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
 app.include_router(highlights.router, prefix="/api/v1/highlights", tags=["highlights"])

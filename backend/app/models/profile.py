@@ -20,6 +20,7 @@ class Profile(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     photos: Mapped[list["ProfilePhoto"]] = relationship(back_populates="profile", lazy="selectin")
+    teams: Mapped[list["Team"]] = relationship(back_populates="profile", lazy="selectin")
     jobs: Mapped[list["ProcessingJob"]] = relationship(back_populates="profile", lazy="selectin")
 
 

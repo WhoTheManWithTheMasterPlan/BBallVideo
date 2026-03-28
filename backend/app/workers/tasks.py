@@ -38,6 +38,7 @@ def process_video(self, job_id: str):
     from app.models.job import ProcessingJob
     from app.models.video import Video
     from app.models.profile import Profile
+    from app.models.team import Team
     from app.models.highlight import Highlight
     from app.models.stat import Stat
 
@@ -74,12 +75,26 @@ def process_video(self, job_id: str):
         logger.info(f"Profile '{profile.name}': {len(profile_embeddings)} photo embeddings loaded")
 
         # Build team color descriptions for CLIP classifier
+        # Prefer Team entity colors; fall back to legacy Profile colors
         team_descriptions = []
         team_names = []
-        if profile.team_color_primary:
-            team_descriptions.append(f"person wearing {profile.team_color_primary} jersey")
+        color_primary = None
+        color_secondary = None
+
+        if job.team_id:
+            team = session.get(Team, job.team_id)
+            if team:
+                color_primary = team.color_primary
+                color_secondary = team.color_secondary
+                logger.info(f"Using team '{team.name}' colors: {color_primary} / {color_secondary}")
+
+        if not color_primary:
+            color_primary = profile.team_color_primary
+            color_secondary = profile.team_color_secondary
+
+        if color_primary:
+            team_descriptions.append(f"person wearing {color_primary} jersey")
             team_names.append("target_team")
-            # Add a generic "other team" description
             team_descriptions.append("person wearing different colored jersey")
             team_names.append("opponent")
 

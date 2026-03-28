@@ -11,8 +11,9 @@ Monorepo with three main components:
 
 **Data model (player-centric)**: User → Profile → Video → ProcessingJob → Highlights/Stats.
 - **Profile**: A player to track, with photos for ReID matching
+- **Team**: A team a player belongs to, with jersey colors. A Profile can belong to multiple Teams.
 - **Video**: Uploaded game film
-- **ProcessingJob**: Links a Video + Profile → runs inference → produces Highlights + Stats
+- **ProcessingJob**: Links a Video + Profile → runs inference → produces Highlights + Stats. Optionally links to a Team for jersey color context.
 - **Highlight**: A clip (made basket, steal, assist) with thumbnail + confidence
 - **Stat**: Individual event record with timestamp + metadata
 
@@ -99,6 +100,11 @@ GET    /api/v1/profiles/{id}                — Get profile
 POST   /api/v1/profiles/{id}/photos         — Upload photo (multipart)
 DELETE /api/v1/profiles/{id}/photos/{pid}   — Delete photo
 
+POST   /api/v1/profiles/{id}/teams         — Create team for profile
+GET    /api/v1/profiles/{id}/teams          — List teams for profile
+PUT    /api/v1/profiles/{id}/teams/{tid}    — Update team
+DELETE /api/v1/profiles/{id}/teams/{tid}    — Delete team
+
 POST   /api/v1/videos/                      — Create video record
 GET    /api/v1/videos/?user_id=             — List videos
 GET    /api/v1/videos/{id}                  — Get video
@@ -106,7 +112,7 @@ POST   /api/v1/videos/{id}/upload           — Upload video file (multipart, <5
 POST   /api/v1/videos/{id}/chunked-upload/init     — Init chunked upload (Form: filename, total_chunks, total_size)
 POST   /api/v1/videos/{id}/chunked-upload/chunk    — Upload one chunk (Form: upload_id, chunk_index + File: chunk)
 POST   /api/v1/videos/{id}/chunked-upload/complete — Reassemble chunks (Form: upload_id)
-POST   /api/v1/videos/{id}/process          — Trigger processing (Form: profile_id)
+POST   /api/v1/videos/{id}/process          — Trigger processing (Form: profile_id, optional team_id)
 
 GET    /api/v1/jobs/{id}                    — Get job status
 GET    /api/v1/jobs/profile/{profile_id}    — Jobs by profile
@@ -181,6 +187,7 @@ Changes in these areas have high blast radius — always run impact analysis:
 
 ```
 backend/app/models/*            → schemas, routes, workers, frontend types
+backend/app/models/team.py      → schemas, routes (profiles/teams), workers, frontend types
 backend/app/schemas/*           → routes, frontend api.ts, frontend types
 backend/app/services/inference/* → pipeline.py, workers/tasks.py
 backend/app/workers/tasks.py    → routes/videos.py (trigger endpoint)

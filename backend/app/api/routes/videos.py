@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.job import ProcessingJob
 from app.models.profile import Profile
+from app.models.team import Team
 from app.models.video import Video
 from app.schemas.job import JobResponse
 from app.schemas.video import VideoCreate, VideoResponse
@@ -210,6 +211,7 @@ async def complete_chunked_upload(
 async def trigger_processing(
     video_id: uuid.UUID,
     profile_id: uuid.UUID = Form(...),
+    team_id: uuid.UUID | None = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     video = await db.get(Video, video_id)
@@ -224,7 +226,12 @@ async def trigger_processing(
     if not profile.photos:
         raise HTTPException(status_code=400, detail="Profile has no photos — upload at least one for ReID")
 
-    job = ProcessingJob(video_id=video_id, profile_id=profile_id)
+    if team_id:
+        team = await db.get(Team, team_id)
+        if not team or team.profile_id != profile_id:
+            raise HTTPException(status_code=404, detail="Team not found for this profile")
+
+    job = ProcessingJob(video_id=video_id, profile_id=profile_id, team_id=team_id)
     db.add(job)
     await db.commit()
     await db.refresh(job)

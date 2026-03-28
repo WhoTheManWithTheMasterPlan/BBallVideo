@@ -7,12 +7,14 @@ from pydantic import BaseModel
 class JobCreate(BaseModel):
     video_id: uuid.UUID
     profile_id: uuid.UUID
+    team_id: uuid.UUID | None = None
 
 
 class JobResponse(BaseModel):
     id: uuid.UUID
     video_id: uuid.UUID
     profile_id: uuid.UUID
+    team_id: uuid.UUID | None
     status: str
     celery_task_id: str | None
     started_at: datetime | None
