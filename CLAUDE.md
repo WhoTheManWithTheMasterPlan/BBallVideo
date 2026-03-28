@@ -7,7 +7,7 @@ Basketball video analysis platform — AI-powered player-centric game film break
 Monorepo with three main components:
 - `backend/` — FastAPI + Celery workers (Python 3.14 on laptop, 3.11+ in Docker)
 - `frontend/` — Next.js 14 + shadcn/ui + D3.js
-- `ml/` — YOLO training configs, model weights, notebooks
+- `ml/` — Custom model training scripts, weights, datasets, platform patches
 
 **Data model (player-centric)**: User → Profile → Video → ProcessingJob → Highlights/Stats.
 - **Profile**: A player to track, with photos for ReID matching
@@ -21,8 +21,13 @@ ReID embeddings match tracked players to profile photos, with optional CLIP team
 ## Tech Stack
 
 ### Inference Pipeline
-- **Player/ball detection**: YOLOv8x (Ultralytics) — COCO classes 0 (person) + 32 (sports ball), ByteTrack tracking
+- **Player/ball detection**: YOLOv8x (Ultralytics) — COCO classes 0 (person) + 32 (sports ball), BoT-SORT tracking
+- **Pose estimation**: YOLOv8m-pose (medium, VRAM-friendly) — COCO skeleton keypoints, heuristic shooting/dribbling classification (`backend/app/services/inference/pose_estimator.py`), runs every 10 frames
+- **Ball detection (custom)**: YOLOv8s fine-tuned on Roboflow basketball-ball dataset (`ml/datasets/basketball-ball/runs/detect/ball-detector/weights/best.pt`)
+- **Ball tracking**: Kalman filter interpolation across detection gaps (`backend/app/services/inference/ball_tracker.py`) — predicts ball position up to 15 frames without detection
 - **Hoop detection**: Separate basketball-specific model (`ml/models/shot-tracker/best.pt`, avishah3) — class 1 (Basketball Hoop)
+- **Scoring classifier**: ResNet50 binary classifier on hoop crops (`ml/models/scoring-classifier/resnet50_cropped.pth`, isBre) — per-frame confidence + scipy peak detection
+- **Action classifier**: MViT v2-S fine-tuned on SpaceJam dataset (`ml/models/action-classifier/mvit_v2_spacejam.pth`) — 10 basketball action classes
 - **Event detection**: Made baskets (ball trajectory through hoop via up→down transition + rim interpolation), steals (cross-team possession change), assists (same-team pass within 5s before basket)
 - **Possession tracking**: Frame-by-frame state machine, ball-player proximity, 8-frame confirmation
 - **Player re-identification**: ResNet18 fallback (OSNet `osnet_x1_0` not in timm for Py3.14), 3-vote confirmation
@@ -76,6 +81,13 @@ npm run dev -- -p 3001
 # Kill zombie celery workers (common issue — check before starting new worker)
 taskkill /F /IM celery.exe
 wmic process where "name='python.exe'" get ProcessId,CommandLine | findstr celery
+
+# ML Training — run from project root, uses backend/.venv
+# Phase 1: Ball detector (YOLOv8s, ~819 images, ~15 min)
+.\backend\.venv\Scripts\python -m ml.train_ball_detector
+# Phase 2: Action classifier (MViT v2-S, ~37K SpaceJam clips, ~1-2 hrs)
+.\backend\.venv\Scripts\python -m ml.train_action_classifier
+# Phase 3: Scoring classifier — pretrained, no training needed (ml/models/scoring-classifier/resnet50_cropped.pth)
 ```
 
 ## API Routes
@@ -90,7 +102,10 @@ DELETE /api/v1/profiles/{id}/photos/{pid}   — Delete photo
 POST   /api/v1/videos/                      — Create video record
 GET    /api/v1/videos/?user_id=             — List videos
 GET    /api/v1/videos/{id}                  — Get video
-POST   /api/v1/videos/{id}/upload           — Upload video file (multipart)
+POST   /api/v1/videos/{id}/upload           — Upload video file (multipart, <50MB)
+POST   /api/v1/videos/{id}/upload/init     — Init chunked upload (Form: filename, total_chunks, total_size)
+POST   /api/v1/videos/{id}/upload/chunk    — Upload one chunk (Form: upload_id, chunk_index + File: chunk)
+POST   /api/v1/videos/{id}/upload/complete — Reassemble chunks (Form: upload_id)
 POST   /api/v1/videos/{id}/process          — Trigger processing (Form: profile_id)
 
 GET    /api/v1/jobs/{id}                    — Get job status
@@ -108,16 +123,17 @@ GET    /api/v1/files/{file_key}             — Serve stored files
 
 ## Data Flow
 
-Camera → Upload video to TrueNAS via API → Create ProcessingJob (video + profile) → Celery task → SCP video to laptop temp dir → YOLO+ByteTrack (person/ball) + best.pt (hoop) → ReID match to profile embeddings → Possession tracking → Event detection (made baskets, steals, assists) → FFmpeg clip extraction → SCP clips back to TrueNAS → Highlight + Stat records → PostgreSQL → API → Frontend
+Camera → Upload video to TrueNAS via API → Create ProcessingJob (video + profile) → Celery task → SCP video to laptop temp dir → YOLO+BoT-SORT (person/ball) + YOLOv8m-pose (skeleton) + best.pt (hoop) → ReID match to profile embeddings → Possession tracking → Event detection (made baskets, steals, assists) → FFmpeg clip extraction → SCP clips back to TrueNAS → Highlight + Stat records → PostgreSQL → API → Frontend
 
 ## Known Issues / Workarounds (Python 3.14 + Windows 11)
 
-- **Celery `platform.system()` hang**: Patched `celery/platforms.py:55` AND `celery/worker/state.py:31` to use `sys.platform` instead. WMI query hangs indefinitely on Win11 + Py3.14. Both patches required — the second one blocks worker startup silently.
+- **`platform.system()` / `platform.uname()` WMI hang**: WMI queries hang indefinitely on Win11 + Py3.14. Affects celery, torch, ultralytics, and any library calling `platform.*` functions. **Fix**: `ml/patch_platform.py` monkey-patches `platform.system()`, `platform.uname()`, `platform.platform()`, `platform.processor()`, and `platform.node()`. Import it before torch/ultralytics: `import ml.patch_platform`. Celery also needs direct patches in `celery/platforms.py:55` and `celery/worker/state.py:31` (replace `platform.system()` with `sys.platform` check).
 - **OSNet not in timm**: `osnet_x1_0` model unavailable. `reid.py` catches `RuntimeError` and falls back to ResNet18.
 - **`lap` package**: Must be installed in venv manually. Ultralytics auto-install targets system Python.
 - **FFmpeg**: Installed via `winget install Gyan.FFmpeg` but not auto-added to PATH. Must export PATH in worker start command.
 - **Zombie celery processes**: Windows doesn't clean up celery workers properly. Always `taskkill /F /IM celery.exe` and check for orphan python.exe processes before starting a new worker.
 - **`--pool=solo`**: Required on Windows (no fork support). Use `-n gpu-worker@ET` for unique node name.
+- **DataLoader `workers>0` OOM**: Ultralytics multiprocessing workers cause `MemoryError` during mixup augmentation on Windows. Always use `workers=0` for YOLO training. MViT/torch training scripts already default to `NUM_WORKERS=0` on Windows.
 - **Laptop sleep kills pipeline**: Long inference runs (~1.75hr) fail if laptop sleeps — Redis connection drops. Before starting worker: `cmd.exe //c "powercfg /change standby-timeout-ac 0"`. Redis reconnect resilience added to `celery_app.py` as a safety net (`socket_keepalive`, `retry_on_timeout`).
 
 ## Ground Rules

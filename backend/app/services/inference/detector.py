@@ -1,5 +1,5 @@
 """
-Player and ball detection using YOLOv8 with ByteTrack tracking.
+Player and ball detection using YOLOv8 with BoT-SORT tracking.
 Hoop detection using a basketball-specific YOLO model.
 """
 
@@ -36,7 +36,7 @@ class PlayerBallDetector:
         results = self.model.track(
             frame,
             persist=True,
-            tracker="bytetrack.yaml",
+            tracker="botsort.yaml",
             classes=[0, 32],
             conf=0.3,
             verbose=False,
@@ -104,7 +104,7 @@ class PlayerBallDetector:
             video_path,
             stream=True,
             persist=True,
-            tracker="bytetrack.yaml",
+            tracker="botsort.yaml",
             classes=[0, 32],
             conf=0.3,
             verbose=False,

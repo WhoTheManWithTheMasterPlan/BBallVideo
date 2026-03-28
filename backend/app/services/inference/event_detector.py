@@ -1,6 +1,6 @@
 """
 Basketball event detection: made baskets, steals, assists.
-Derives events from possession state + hoop detections.
+Derives events from possession state + hoop detections + Kalman ball tracking.
 """
 
 import logging
@@ -8,6 +8,7 @@ import math
 from collections import deque
 from dataclasses import dataclass
 
+from app.services.inference.ball_tracker import BallTracker, BallState
 from app.services.inference.detector import Detection
 from app.services.inference.possession_tracker import PossessionState
 
@@ -25,36 +26,52 @@ class BasketballEvent:
 
 
 class ShotTracker:
-    """Tracks ball trajectory relative to hoop to detect made baskets."""
+    """Tracks ball trajectory relative to hoop to detect made baskets.
+
+    Uses Kalman-filtered ball positions for smooth trajectories across detection gaps.
+    Three detection methods (any one triggers a made basket):
+      1. Classic up→down: ball goes above hoop then below, trajectory crosses rim
+      2. Proximity burst: ball appears inside/very near hoop bbox multiple times in short window
+      3. Velocity spike: ball has sudden downward velocity near hoop (falling through net)
+    """
 
     def __init__(self):
-        self.ball_positions: deque = deque(maxlen=60)  # (cx, cy, frame_idx)
-        self.hoop_position: tuple[float, float, float, float] | None = None  # best hoop bbox
+        self.ball_tracker = BallTracker()
+        self.hoop_position: tuple[float, float, float, float] | None = None
+        self.hoop_confidence: float = 0.0
         self._ball_above_hoop = False
         self._above_frame = 0
+        # Proximity tracking: count frames where ball is very close to hoop
+        self._near_hoop_frames: deque = deque(maxlen=30)
 
     def update_hoop(self, hoop_dets: list[Detection]):
         """Update hoop position from detections. Use highest confidence."""
         if hoop_dets:
             best = max(hoop_dets, key=lambda d: d.confidence)
             self.hoop_position = best.bbox
+            self.hoop_confidence = best.confidence
 
-    def update_ball(self, ball_dets: list[Detection], frame_idx: int):
-        """Track ball position."""
+    def update_ball(self, ball_dets: list[Detection], frame_idx: int) -> BallState | None:
+        """Track ball position with Kalman interpolation. Returns current ball state."""
         if ball_dets:
             best = max(ball_dets, key=lambda d: d.confidence)
             cx = (best.bbox[0] + best.bbox[2]) / 2
             cy = (best.bbox[1] + best.bbox[3]) / 2
-            self.ball_positions.append((cx, cy, frame_idx))
+            return self.ball_tracker.update(cx, cy, frame_idx, best.confidence)
+        else:
+            # No detection — let Kalman predict
+            return self.ball_tracker.update(None, None, frame_idx, 0.0)
 
     def check_made_basket(self, frame_idx: int) -> float:
         """Check if ball trajectory indicates a made basket.
 
         Returns confidence (0-1), or 0 if no shot detected.
-        Uses the avishah3 approach: ball goes above hoop, then below = shot attempt.
-        If ball path intersects rim horizontally = made basket.
         """
-        if not self.hoop_position or len(self.ball_positions) < 3:
+        if not self.hoop_position:
+            return 0.0
+
+        trajectory = self.ball_tracker.get_recent_trajectory(45)
+        if len(trajectory) < 3:
             return 0.0
 
         hx1, hy1, hx2, hy2 = self.hoop_position
@@ -62,50 +79,154 @@ class ShotTracker:
         hoop_cy = (hy1 + hy2) / 2
         hoop_w = hx2 - hx1
         hoop_h = hy2 - hy1
-        rim_top = hy1 - 0.5 * hoop_h
 
-        ball_cx, ball_cy, _ = self.ball_positions[-1]
+        # --- Method 1: Up→Down trajectory through rim ---
+        conf = self._check_trajectory(trajectory, hx1, hy1, hx2, hy2,
+                                       hoop_cx, hoop_cy, hoop_w, hoop_h, frame_idx)
+        if conf > 0:
+            return conf
 
-        # Check: is ball currently near/above hoop region?
-        near_hoop_x = abs(ball_cx - hoop_cx) < 4 * hoop_w
+        # --- Method 2: Proximity burst (ball near hoop center repeatedly) ---
+        conf = self._check_proximity_burst(trajectory, hoop_cx, hoop_cy, hoop_w, hoop_h)
+        if conf > 0:
+            return conf
+
+        # --- Method 3: Downward velocity near hoop ---
+        conf = self._check_velocity_spike(trajectory, hoop_cx, hoop_cy, hoop_w, hoop_h)
+        if conf > 0:
+            return conf
+
+        return 0.0
+
+    def _check_trajectory(self, trajectory: list[BallState],
+                          hx1, hy1, hx2, hy2,
+                          hoop_cx, hoop_cy, hoop_w, hoop_h,
+                          frame_idx: int) -> float:
+        """Classic up→down transition check with loosened thresholds."""
+        ball = trajectory[-1]
+        rim_top = hy1 - hoop_h  # More generous — 1x hoop height above rim (was 0.5x)
+
+        # Check: is ball in the general hoop area horizontally?
+        # Use 6x hoop width (was 4x) — gym cameras vary widely
+        near_hoop_x = abs(ball.cx - hoop_cx) < 6 * hoop_w
 
         if not near_hoop_x:
             self._ball_above_hoop = False
             return 0.0
 
         # Track up→down transition
-        if ball_cy < rim_top and not self._ball_above_hoop:
+        if ball.cy < rim_top and not self._ball_above_hoop:
             self._ball_above_hoop = True
             self._above_frame = frame_idx
 
-        if self._ball_above_hoop and ball_cy > hy2:
-            # Ball went from above to below hoop — shot attempt
+        if self._ball_above_hoop and ball.cy > hy2:
+            # Ball went from above to below hoop
             self._ball_above_hoop = False
 
-            # Check if ball path crosses through the rim
-            # Find the last position above rim and first below
+            # Don't count if the transition took too long (>2 seconds = not a shot)
+            if (frame_idx - self._above_frame) > 60:
+                return 0.0
+
+            # Find positions above and below hoop for interpolation
             above_pos = None
             below_pos = None
-            for cx, cy, fidx in reversed(self.ball_positions):
-                if cy < hy1 and above_pos is None:
-                    above_pos = (cx, cy)
-                if cy > hy2 and below_pos is None:
-                    below_pos = (cx, cy)
+            for state in reversed(trajectory):
+                if state.cy < hy1 and above_pos is None:
+                    above_pos = (state.cx, state.cy)
+                if state.cy > hy2 and below_pos is None:
+                    below_pos = (state.cx, state.cy)
                 if above_pos and below_pos:
                     break
 
             if above_pos and below_pos and above_pos[1] != below_pos[1]:
-                # Linear interpolation: where does ball cross rim height?
+                # Interpolate where ball crosses rim height
                 t = (hoop_cy - above_pos[1]) / (below_pos[1] - above_pos[1])
                 predicted_x = above_pos[0] + t * (below_pos[0] - above_pos[0])
 
-                rim_left = hx1 - 0.3 * hoop_w
-                rim_right = hx2 + 0.3 * hoop_w
+                # Wider rim tolerance (was 0.3x, now 0.5x on each side)
+                rim_left = hx1 - 0.5 * hoop_w
+                rim_right = hx2 + 0.5 * hoop_w
 
                 if rim_left < predicted_x < rim_right:
-                    return 0.8  # Made basket
+                    return 0.85  # High confidence — trajectory through rim
                 else:
-                    return 0.0  # Miss — ball didn't go through rim
+                    # Near miss — still could be a make with noisy tracking
+                    rim_left_loose = hx1 - 1.0 * hoop_w
+                    rim_right_loose = hx2 + 1.0 * hoop_w
+                    if rim_left_loose < predicted_x < rim_right_loose:
+                        return 0.55  # Lower confidence — might be a make
+
+        return 0.0
+
+    def _check_proximity_burst(self, trajectory: list[BallState],
+                                hoop_cx, hoop_cy, hoop_w, hoop_h) -> float:
+        """Detect made basket when ball appears near hoop center multiple times.
+
+        In gym footage, the ball often "appears" inside the hoop bbox for several frames
+        when going through the net, even without a clean up→down trajectory.
+        """
+        recent = trajectory[-20:]  # Last ~0.7 seconds
+        if len(recent) < 5:
+            return 0.0
+
+        near_count = 0
+        for state in recent:
+            dx = abs(state.cx - hoop_cx) / max(hoop_w, 1)
+            dy = abs(state.cy - hoop_cy) / max(hoop_h, 1)
+            if dx < 1.5 and dy < 2.0:  # Within 1.5x hoop width and 2x hoop height
+                near_count += 1
+
+        # Need at least 4 frames near hoop in a 20-frame window
+        if near_count >= 4:
+            # Also check that ball moved downward through this region
+            first_near = None
+            last_near = None
+            for state in recent:
+                dx = abs(state.cx - hoop_cx) / max(hoop_w, 1)
+                dy = abs(state.cy - hoop_cy) / max(hoop_h, 1)
+                if dx < 1.5 and dy < 2.0:
+                    if first_near is None:
+                        first_near = state
+                    last_near = state
+
+            if first_near and last_near and last_near.cy > first_near.cy:
+                # Ball moved downward through hoop region
+                return 0.65
+
+        return 0.0
+
+    def _check_velocity_spike(self, trajectory: list[BallState],
+                               hoop_cx, hoop_cy, hoop_w, hoop_h) -> float:
+        """Detect sudden downward velocity near hoop — ball falling through net."""
+        if len(trajectory) < 5:
+            return 0.0
+
+        recent = trajectory[-8:]
+        if len(recent) < 4:
+            return 0.0
+
+        # Check if ball is near hoop
+        latest = recent[-1]
+        dx = abs(latest.cx - hoop_cx)
+        if dx > 3 * hoop_w:
+            return 0.0
+
+        # Calculate vertical velocity over last few frames
+        velocities = []
+        for i in range(1, len(recent)):
+            dy = recent[i].cy - recent[i - 1].cy
+            velocities.append(dy)
+
+        if not velocities:
+            return 0.0
+
+        avg_vy = sum(velocities) / len(velocities)
+        max_vy = max(velocities)
+
+        # Strong downward velocity near hoop height
+        near_hoop_y = abs(latest.cy - hoop_cy) < 3 * hoop_h
+        if near_hoop_y and avg_vy > hoop_h * 0.3 and max_vy > hoop_h * 0.5:
+            return 0.6
 
         return 0.0
 
@@ -115,6 +236,7 @@ class EventDetector:
 
     STEAL_COOLDOWN_FRAMES = 60  # Don't detect steals within N frames of each other
     ASSIST_WINDOW_FRAMES = 150  # ~5 seconds at 30fps — pass before basket = assist
+    BASKET_COOLDOWN_FRAMES = 60  # ~2 seconds between baskets (was 90)
 
     def __init__(self):
         self.shot_tracker = ShotTracker()
@@ -141,7 +263,7 @@ class EventDetector:
 
         # Check for made basket
         shot_conf = self.shot_tracker.check_made_basket(frame_idx)
-        if shot_conf > 0.5 and (frame_idx - self._last_made_basket_frame) > 90:
+        if shot_conf > 0.5 and (frame_idx - self._last_made_basket_frame) > self.BASKET_COOLDOWN_FRAMES:
             scorer_id = possession.last_holder_track_id if possession.ball_status == "in_air" else possession.holder_track_id
             if scorer_id >= 0:
                 self._last_made_basket_frame = frame_idx
@@ -153,8 +275,10 @@ class EventDetector:
                     confidence=shot_conf,
                     metadata={"scorer_track_id": scorer_id},
                 ))
+                logger.info(f"Made basket detected at frame {frame_idx} "
+                           f"(t={timestamp:.1f}s, conf={shot_conf:.2f}, scorer=track_{scorer_id})")
 
-                # Check for assist — was there a same-team pass before this basket?
+                # Check for assist
                 assist_event = self._check_assist(frame_idx, timestamp, scorer_id)
                 if assist_event:
                     events.append(assist_event)
@@ -206,7 +330,6 @@ class EventDetector:
         self, frame_idx: int, timestamp: float, scorer_track_id: int
     ) -> BasketballEvent | None:
         """Check if there was a same-team pass leading to this made basket."""
-        # Look back through possession history for a same-team possession change
         scorer_team = None
         prev_holder = None
 

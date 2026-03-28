@@ -1,6 +1,11 @@
 """
 Main inference pipeline — orchestrates detection, tracking, ReID, possession, and event detection.
 Player-centric: processes video for a specific target profile, filtering events to that player.
+
+Uses dual made-basket detection:
+  1. Heuristic (ball trajectory through hoop via Kalman tracking)
+  2. ResNet50 scoring classifier (visual classification of hoop crop)
+Both signals are merged with deduplication.
 """
 
 import logging
@@ -12,6 +17,7 @@ import numpy as np
 from app.services.inference.detector import PlayerBallDetector, Detection
 from app.services.inference.event_detector import BasketballEvent, EventDetector
 from app.services.inference.ocr import JerseyOCR
+from app.services.inference.pose_estimator import PoseEstimator
 from app.services.inference.possession_tracker import PossessionTracker
 from app.services.inference.reid import ReIDExtractor, ReIDMatcher
 from app.services.inference.team_classifier import TeamClassifier
@@ -29,6 +35,8 @@ class PlayerInfo:
     jersey_votes: dict[int, int] = field(default_factory=dict)
     reid_votes: dict[str, int] = field(default_factory=dict)
     is_target: bool = False  # matched to target profile
+    last_pose: str | None = None  # last classified pose: "shooting", "dribbling", "other"
+    last_pose_confidence: float = 0.0
 
 
 class InferencePipeline:
@@ -47,6 +55,23 @@ class InferencePipeline:
         self.reid_extractor = ReIDExtractor()
         self.reid_matcher = ReIDMatcher()
         self.ocr = JerseyOCR()
+
+        # Pose estimator (yolov8m-pose — medium model to conserve VRAM)
+        self.pose_estimator: PoseEstimator | None = None
+        try:
+            self.pose_estimator = PoseEstimator()
+            logger.info("Pose estimator enabled")
+        except Exception as e:
+            logger.warning(f"Pose estimator not available: {e}")
+
+        # Scoring classifier (ResNet50 hoop crop classifier)
+        self.scoring_classifier = None
+        try:
+            from app.services.inference.scoring_classifier import ScoringClassifier
+            self.scoring_classifier = ScoringClassifier()
+            logger.info("Scoring classifier enabled")
+        except Exception as e:
+            logger.warning(f"Scoring classifier not available: {e}")
 
         # Profile jersey number — used to boost/confirm ReID matches
         self.profile_jersey_number = profile_jersey_number
@@ -136,6 +161,7 @@ class InferencePipeline:
         """Run the full inference pipeline on a video.
 
         Returns events filtered to the target profile's matched track IDs.
+        Uses dual detection: heuristic (trajectory) + classifier (ResNet50 hoop crop).
         """
         cap = cv2.VideoCapture(video_path)
         self._fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -149,18 +175,34 @@ class InferencePipeline:
         logger.info(f"Processing video: {video_path} at {self._fps} FPS, {total_frames} frames")
         logger.info(f"vid_stride={vid_stride}, effective FPS={effective_fps:.1f}, ~{total_processed} frames to process")
 
-        all_events: list[BasketballEvent] = []
+        heuristic_events: list[BasketballEvent] = []
+        # Track hoop bbox for scoring classifier
+        last_hoop_bbox: tuple[float, float, float, float] | None = None
 
         for frame_idx, detections, frame in self.detector.process_video(video_path, vid_stride=vid_stride):
             actual_frame = frame_idx * vid_stride
             timestamp = actual_frame / self._fps if self._fps > 0 else 0
 
             if frame is None:
+                if self.scoring_classifier:
+                    self.scoring_classifier.classify_frame(
+                        np.zeros((128, 128, 3), dtype=np.uint8), None)
                 continue
 
             # Update player info (ReID, team, jersey)
             for det in detections:
                 self._update_player_info(det, frame)
+
+            # Track hoop position for classifier
+            hoop_dets = [d for d in detections if d.class_name == "hoop"]
+            if hoop_dets:
+                best_hoop = max(hoop_dets, key=lambda d: d.confidence)
+                last_hoop_bbox = best_hoop.bbox
+
+            # Run scoring classifier on hoop crop (BGR→RGB)
+            if self.scoring_classifier:
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                self.scoring_classifier.classify_frame(frame_rgb, last_hoop_bbox)
 
             # Build team mapping for possession tracker
             player_teams = {
@@ -170,25 +212,130 @@ class InferencePipeline:
             # Update possession
             possession = self.possession_tracker.update(detections, player_teams)
 
-            # Detect events
+            # Pose estimation (every 10 frames to conserve GPU — not every frame)
+            if self.pose_estimator and frame_idx % 10 == 0:
+                # Run pose model once per frame, then match results to tracked players by IoU
+                all_poses = self.pose_estimator.estimate(frame)
+                if all_poses:
+                    person_dets = [d for d in detections if d.class_name == "person" and d.track_id >= 0]
+                    for det in person_dets:
+                        best_pose = None
+                        best_iou = 0.0
+                        for pose in all_poses:
+                            iou = self.pose_estimator._compute_iou(pose.bbox, det.bbox)
+                            if iou > best_iou and iou >= 0.3:
+                                best_iou = iou
+                                best_pose = pose
+                        if best_pose and det.track_id in self.players:
+                            self.players[det.track_id].last_pose = best_pose.action
+                            self.players[det.track_id].last_pose_confidence = best_pose.action_confidence
+
+            # Heuristic event detection (trajectory + Kalman)
             events = self.event_detector.update(frame_idx, timestamp, detections, possession)
-            all_events.extend(events)
+
+            # Enrich events with pose data from the player involved
+            for event in events:
+                if event.player_track_id in self.players:
+                    player = self.players[event.player_track_id]
+                    if player.last_pose:
+                        event.metadata["pose"] = player.last_pose
+                        event.metadata["pose_confidence"] = player.last_pose_confidence
+
+            heuristic_events.extend(events)
 
             # Log progress every 1000 processed frames
             if frame_idx > 0 and frame_idx % 1000 == 0:
                 pct = (frame_idx / total_processed * 100) if total_processed > 0 else 0
                 logger.info(f"Frame {frame_idx}/{total_processed} ({pct:.1f}%) — "
-                           f"{len(all_events)} events, {len(self.players)} players, "
+                           f"{len(heuristic_events)} heuristic events, "
+                           f"{len(self.players)} players, "
                            f"{len(self.target_track_ids)} target tracks")
+
+        # Get classifier-based scoring events
+        classifier_events: list[BasketballEvent] = []
+        if self.scoring_classifier:
+            scoring_peaks = self.scoring_classifier.get_scoring_events(
+                fps=effective_fps,
+                confidence_threshold=0.5,
+                min_distance_seconds=3.0,
+            )
+            for peak in scoring_peaks:
+                # Find the closest possession holder at the time of the basket
+                scorer_id = self._find_scorer_at_frame(peak["frame_idx"])
+                classifier_events.append(BasketballEvent(
+                    event_type="made_basket",
+                    frame_idx=peak["frame_idx"],
+                    timestamp=peak["timestamp"],
+                    player_track_id=scorer_id,
+                    confidence=peak["confidence"],
+                    metadata={"source": "classifier", "scorer_track_id": scorer_id},
+                ))
+
+        # Merge heuristic + classifier events (deduplicate within 3 seconds)
+        all_events = self._merge_events(heuristic_events, classifier_events, gap_seconds=3.0)
+
+        logger.info(f"Pipeline complete: {len(heuristic_events)} heuristic events, "
+                   f"{len(classifier_events)} classifier events, "
+                   f"{len(all_events)} merged events")
 
         # Filter events to target profile's track IDs
         if self.target_track_ids:
             filtered = [e for e in all_events if e.player_track_id in self.target_track_ids]
-            logger.info(f"Pipeline complete. {len(all_events)} total events, "
-                       f"{len(filtered)} for target profile, "
-                       f"{len(self.players)} players tracked, "
-                       f"{len(self.target_track_ids)} target tracks matched")
+            logger.info(f"Filtered to target: {len(filtered)} of {len(all_events)} events, "
+                       f"{len(self.target_track_ids)} target tracks")
             return filtered
         else:
+            # TODO: ReID fallback returns all events unfiltered — causes highlights from wrong players.
+            # Fix: return [] and surface "no target matched" error to the job status.
+            # Also investigate why ReID matching fails (missing profile photos? bad embeddings?)
             logger.warning("No target tracks matched — returning all events")
             return all_events
+
+    def _find_scorer_at_frame(self, frame_idx: int) -> int:
+        """Find the most likely scorer at a given frame from possession history."""
+        # Check possession history in the event detector
+        for hist_frame, ps in reversed(self.event_detector.possession_history):
+            if abs(hist_frame - frame_idx) < 30:  # Within ~1 second
+                if ps.ball_status == "in_air" and ps.last_holder_track_id >= 0:
+                    return ps.last_holder_track_id
+                if ps.holder_track_id >= 0:
+                    return ps.holder_track_id
+        return -1
+
+    def _merge_events(self, heuristic: list[BasketballEvent],
+                      classifier: list[BasketballEvent],
+                      gap_seconds: float = 3.0) -> list[BasketballEvent]:
+        """Merge events from both sources, deduplicating within gap_seconds.
+
+        When both sources detect the same basket, keep the higher-confidence one.
+        Events unique to either source are kept as-is.
+        """
+        all_events = []
+
+        # Start with heuristic events (steals/assists + made baskets)
+        for event in heuristic:
+            all_events.append(event)
+
+        # Add classifier events that don't overlap with existing made_basket events
+        for c_event in classifier:
+            is_duplicate = False
+            for existing in all_events:
+                if (existing.event_type == "made_basket"
+                        and abs(existing.timestamp - c_event.timestamp) < gap_seconds):
+                    # Overlap — keep higher confidence
+                    if c_event.confidence > existing.confidence:
+                        existing.confidence = c_event.confidence
+                        existing.metadata["classifier_confirmed"] = True
+                    is_duplicate = True
+                    break
+
+            if not is_duplicate:
+                # Classifier found a basket the heuristic missed
+                c_event.metadata["source"] = "classifier_only"
+                all_events.append(c_event)
+                logger.info(f"Classifier-only made basket at {c_event.timestamp:.1f}s "
+                           f"(conf={c_event.confidence:.2f})")
+
+        # Sort by timestamp
+        all_events.sort(key=lambda e: e.timestamp)
+        return all_events

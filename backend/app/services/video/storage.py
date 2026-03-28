@@ -1,6 +1,12 @@
 """
 Local filesystem storage for video and clip files.
 Stores on TrueNAS at configurable base path with 1TB limit.
+
+TODO: Better file lifecycle management needed:
+  - Cleanup old raw videos + highlights when a job is deleted or re-run
+  - Cascade delete: deleting a video/job should remove associated files on disk
+  - B: drive SMB mount is read-only from laptop — cleanup must happen server-side
+  - Consider periodic storage audit / garbage collection for orphaned files
 """
 
 import shutil
