@@ -119,15 +119,35 @@ export default function NewProfilePage() {
             Upload clear photos of the player. These are used for AI identification in game footage.
             More photos = better accuracy.
           </p>
-          <input
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={(e) => setPhotos(Array.from(e.target.files || []))}
-            className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-gray-700 file:text-white file:cursor-pointer"
-          />
+          <label className="inline-block px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm cursor-pointer transition-colors">
+            + Add Photos
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const newFiles = Array.from(e.target.files || []);
+                if (newFiles.length > 0) setPhotos((prev) => [...prev, ...newFiles]);
+                e.target.value = "";
+              }}
+            />
+          </label>
           {photos.length > 0 && (
-            <p className="text-sm text-gray-400 mt-2">{photos.length} photo{photos.length !== 1 ? "s" : ""} selected</p>
+            <div className="mt-3 space-y-2">
+              {photos.map((file, i) => (
+                <div key={i} className="flex items-center justify-between p-2 bg-gray-900 rounded-lg border border-gray-700 text-sm">
+                  <span className="text-gray-300 truncate mr-3">{file.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => setPhotos((prev) => prev.filter((_, j) => j !== i))}
+                    className="text-red-400 hover:text-red-300 text-xs shrink-0"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
         </div>
 

@@ -89,6 +89,13 @@ export default function DashboardPage() {
                       {profile.photos.length} photo{profile.photos.length !== 1 ? "s" : ""}
                       {profile.team_color_primary && ` · ${profile.team_color_primary}`}
                     </div>
+                    <Link
+                      href={`/profiles/${profile.id}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-xs text-orange-400 hover:text-orange-300 mt-1 inline-block"
+                    >
+                      Edit Photos
+                    </Link>
                   </div>
                 </div>
               </button>
