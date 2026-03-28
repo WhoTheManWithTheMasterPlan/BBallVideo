@@ -193,11 +193,13 @@ def process_video(self, job_id: str):
                 )
                 session.add(highlight)
 
-                # Write Stat record
+                # Write Stat record (with court coordinates if available)
                 stat = Stat(
                     job_id=uuid.UUID(job_id),
                     event_type=event.event_type,
                     timestamp=event.timestamp,
+                    court_x=event.metadata.get("court_x"),
+                    court_y=event.metadata.get("court_y"),
                     metadata_=event.metadata,
                 )
                 session.add(stat)

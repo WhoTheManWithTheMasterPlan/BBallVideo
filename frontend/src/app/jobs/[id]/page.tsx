@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import type { ProcessingJob, Highlight } from "@/types";
+import type { ProcessingJob, Highlight, Stat } from "@/types";
 import ClipPlayer from "@/components/video/ClipPlayer";
+import ShotChart from "@/components/court/ShotChart";
 
 export default function JobDetailPage() {
   const params = useParams();
@@ -14,6 +15,7 @@ export default function JobDetailPage() {
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [filterType, setFilterType] = useState<string>("");
   const [selectedClip, setSelectedClip] = useState<Highlight | null>(null);
+  const [stats, setStats] = useState<Stat[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -44,6 +46,10 @@ export default function JobDetailPage() {
       api.highlights
         .listByJob(jobId, filterType || undefined)
         .then((h) => setHighlights(h as Highlight[]))
+        .catch(() => {});
+      api.stats
+        .listByJob(jobId)
+        .then((s) => setStats(s as Stat[]))
         .catch(() => {});
     }
   }, [jobId, job?.status, filterType]);
@@ -222,6 +228,27 @@ export default function JobDetailPage() {
               ))}
             </div>
           )}
+
+          {/* Shot Chart */}
+          {(() => {
+            const courtShots = stats
+              .filter((s) => s.court_x !== null && s.court_y !== null)
+              .map((s) => ({
+                court_x: s.court_x!,
+                court_y: s.court_y!,
+                made: s.event_type === "made_basket",
+                event_type: s.event_type,
+              }));
+            if (courtShots.length === 0) return null;
+            return (
+              <div className="mt-8">
+                <h2 className="text-xl font-semibold mb-4">Shot Chart</h2>
+                <div className="bg-gray-900 rounded-lg border border-gray-700 p-4 inline-block">
+                  <ShotChart shots={courtShots} />
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>

@@ -1,8 +1,8 @@
 """
-X3D-M basketball action classifier inference module.
+MViT v2-S basketball action classifier inference module.
 
 Classifies 16-frame sequences into basketball actions using a fine-tuned
-X3D-M model trained on the SpaceJam dataset.
+MViT v2-S model trained on the SpaceJam dataset.
 
 Classes: block, pass, run, dribble, shoot, ball_in_hand, defence, pick,
          no_action, walk
@@ -18,7 +18,7 @@ import torch.nn as nn
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_WEIGHTS = "ml/models/action-classifier/x3d_m_spacejam_best.pth"
+DEFAULT_WEIGHTS = "ml/models/action-classifier/mvit_v2_spacejam.pth"
 DEFAULT_METADATA = "ml/models/action-classifier/training_metadata.json"
 
 # Class index to name mapping
@@ -45,7 +45,7 @@ KINETICS_STD = [0.225, 0.225, 0.225]
 
 
 class ActionClassifier:
-    """Classifies basketball actions from 16-frame video clips using X3D-M."""
+    """Classifies basketball actions from 16-frame video clips using MViT v2-S."""
 
     def __init__(self, weights_path: str | None = None, device: str | None = None):
         if device is None:
@@ -54,7 +54,10 @@ class ActionClassifier:
 
         # Resolve weights path relative to project root
         if weights_path is None:
-            candidate = Path(__file__).parent.parent.parent.parent / DEFAULT_WEIGHTS
+            # __file__ = backend/app/services/inference/action_classifier.py
+            # 4 parents = backend/, 5 parents = project root
+            project_root = Path(__file__).parent.parent.parent.parent.parent
+            candidate = project_root / DEFAULT_WEIGHTS
             if candidate.exists():
                 weights_path = str(candidate)
             else:
@@ -87,62 +90,22 @@ class ActionClassifier:
         self._std = torch.tensor(KINETICS_STD).view(1, 3, 1, 1).to(self.device)
 
     def _build_model(self) -> nn.Module:
-        """Build X3D-M architecture with custom head (no pretrained weights)."""
-        try:
-            model = torch.hub.load(
-                "facebookresearch/pytorchvideo",
-                model="x3d_m",
-                pretrained=False,
-            )
-        except Exception:
-            try:
-                from pytorchvideo.models import x3d
-                model = x3d.create_x3d(
-                    input_clip_length=NUM_FRAMES,
-                    input_crop_size=CROP_SIZE,
-                    model_num_class=400,
-                    dropout_rate=0.5,
-                    width_factor=2.0,
-                    depth_factor=2.2,
-                )
-            except ImportError:
-                raise RuntimeError(
-                    "Cannot load X3D-M architecture. Ensure torch.hub or "
-                    "pytorchvideo is available."
-                )
+        """Build MViT v2-S architecture with custom head (no pretrained weights)."""
+        from torchvision.models.video import mvit_v2_s
 
-        # Replace classification head (same as training script)
-        if hasattr(model, "blocks"):
-            head_block = model.blocks[-1]
-            if hasattr(head_block, "proj"):
-                in_features = head_block.proj.in_features
-                head_block.proj = nn.Linear(in_features, NUM_CLASSES)
-                if hasattr(head_block, "activation"):
-                    head_block.activation = nn.Identity()
-            else:
-                self._replace_head_fallback(model)
-        else:
-            self._replace_head_fallback(model)
+        # Build without pretrained weights — we'll load our fine-tuned weights
+        model = mvit_v2_s(weights=None)
+
+        # MViT v2-S head is model.head[1]: Linear(768, 400)
+        # Replace with our 10-class head
+        in_features = model.head[1].in_features
+        model.head[1] = nn.Linear(in_features, NUM_CLASSES)
 
         return model
 
-    @staticmethod
-    def _replace_head_fallback(model: nn.Module):
-        """Find and replace any Linear(*, 400) layer."""
-        for name, module in model.named_modules():
-            if isinstance(module, nn.Linear) and module.out_features == 400:
-                in_features = module.in_features
-                parts = name.split(".")
-                parent = model
-                for part in parts[:-1]:
-                    parent = getattr(parent, part)
-                setattr(parent, parts[-1], nn.Linear(in_features, NUM_CLASSES))
-                return
-        raise RuntimeError("Could not find classification head to replace.")
-
     def preprocess(self, frames: list[np.ndarray]) -> torch.Tensor:
         """
-        Preprocess a list of frames for X3D-M inference.
+        Preprocess a list of frames for MViT v2-S inference.
 
         Args:
             frames: List of 16 RGB or BGR numpy arrays (H, W, 3) uint8.
@@ -167,10 +130,6 @@ class ActionClassifier:
 
         # Stack to (T, H, W, C) and convert
         video = np.stack(frames, axis=0)  # (T, H, W, C)
-
-        # Detect BGR (OpenCV default) vs RGB — assume BGR if channel order unknown
-        # The training pipeline uses RGB, so convert if needed
-        # Caller should pass RGB; we handle both gracefully
         video = torch.from_numpy(video).float() / 255.0  # (T, H, W, C)
         video = video.permute(0, 3, 1, 2)  # (T, C, H, W)
 

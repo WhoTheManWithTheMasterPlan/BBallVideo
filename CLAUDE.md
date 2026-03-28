@@ -10,8 +10,8 @@ Monorepo with three main components:
 - `ml/` — Custom model training scripts, weights, datasets, platform patches
 
 **Data model (player-centric)**: User → Profile → Video → ProcessingJob → Highlights/Stats.
-- **Profile**: A player to track, with photos for ReID matching
-- **Team**: A team a player belongs to, with jersey colors. A Profile can belong to multiple Teams.
+- **Profile**: A player to track (name + user_id). Legacy fields `jersey_number`, `team_color_primary`, `team_color_secondary`, and `ProfilePhoto` still exist for backward compatibility only.
+- **Team**: A team a player belongs to, with jersey_number, colors (primary/secondary), AND photos (TeamPhoto). A Profile can belong to multiple Teams. Team is the source of truth for jersey/color/photo data.
 - **Video**: Uploaded game film
 - **ProcessingJob**: Links a Video + Profile → runs inference → produces Highlights + Stats. Optionally links to a Team for jersey color context.
 - **Highlight**: A clip (made basket, steal, assist) with thumbnail + confidence
@@ -28,7 +28,8 @@ ReID embeddings match tracked players to profile photos, with optional CLIP team
 - **Ball tracking**: Kalman filter interpolation across detection gaps (`backend/app/services/inference/ball_tracker.py`) — predicts ball position up to 15 frames without detection
 - **Hoop detection**: Separate basketball-specific model (`ml/models/shot-tracker/best.pt`, avishah3) — class 1 (Basketball Hoop)
 - **Scoring classifier**: ResNet50 binary classifier on hoop crops (`ml/models/scoring-classifier/resnet50_cropped.pth`, isBre) — per-frame confidence + scipy peak detection
-- **Action classifier**: MViT v2-S fine-tuned on SpaceJam dataset (`ml/models/action-classifier/mvit_v2_spacejam.pth`) — 10 basketball action classes
+- **Action classifier**: MViT v2-S fine-tuned on SpaceJam dataset (`ml/models/action-classifier/mvit_v2_spacejam.pth`) — 10 basketball action classes (block, pass, run, dribble, shoot, ball_in_hand, defence, pick, no_action, walk). Integrated into pipeline: buffers 16 frames per player crop, classifies actions, enriches events with `action` + `action_confidence` metadata.
+- **Court detection**: YOLOv8x-pose on basketball court keypoints (`ml/models/court-detector/best.pt`) — 18 keypoints (corners, free throw, midcourt, paint). Runs every 30 frames. Homography maps player foot positions to normalized court coords for shot charts. Training script: `ml/train_court_detector.py` (Roboflow dataset).
 - **Event detection**: Made baskets (ball trajectory through hoop via up→down transition + rim interpolation), steals (cross-team possession change), assists (same-team pass within 5s before basket)
 - **Possession tracking**: Frame-by-frame state machine, ball-player proximity, 8-frame confirmation
 - **Player re-identification**: ResNet18 fallback (OSNet `osnet_x1_0` not in timm for Py3.14), 3-vote confirmation
@@ -86,9 +87,15 @@ wmic process where "name='python.exe'" get ProcessId,CommandLine | findstr celer
 # ML Training — run from project root, uses backend/.venv
 # Phase 1: Ball detector (YOLOv8s, ~819 images, ~15 min)
 .\backend\.venv\Scripts\python -m ml.train_ball_detector
-# Phase 2: Action classifier (MViT v2-S, ~37K SpaceJam clips, ~1-2 hrs)
+# Phase 2: Action classifier (MViT v2-S, ~37K SpaceJam clips, ~18hrs local)
 .\backend\.venv\Scripts\python -m ml.train_action_classifier
+# Phase 2 (Kaggle cloud): Copy ml/kaggle_train_action_classifier.py into a Kaggle notebook
+#   - Dataset: adamschaechter/spacejam-action-recognition (clips in examples/ folder)
+#   - Accelerator: GPU T4 x2, 12hr session limit, auto-checkpoint/resume
+#   - Output: /kaggle/working/mvit_v2_spacejam.pth → download to ml/models/action-classifier/
 # Phase 3: Scoring classifier — pretrained, no training needed (ml/models/scoring-classifier/resnet50_cropped.pth)
+# Phase 4: Court keypoint detector (YOLOv8x-pose, Roboflow dataset, needs ROBOFLOW_API_KEY)
+.\backend\.venv\Scripts\python -m ml.train_court_detector
 ```
 
 ## API Routes
@@ -104,6 +111,9 @@ POST   /api/v1/profiles/{id}/teams         — Create team for profile
 GET    /api/v1/profiles/{id}/teams          — List teams for profile
 PUT    /api/v1/profiles/{id}/teams/{tid}    — Update team
 DELETE /api/v1/profiles/{id}/teams/{tid}    — Delete team
+
+POST   /api/v1/profiles/{id}/teams/{tid}/photos         — Upload team photo (multipart)
+DELETE /api/v1/profiles/{id}/teams/{tid}/photos/{pid}    — Delete team photo
 
 POST   /api/v1/videos/                      — Create video record
 GET    /api/v1/videos/?user_id=             — List videos
@@ -129,7 +139,7 @@ GET    /api/v1/files/{file_key}             — Serve stored files
 
 ## Data Flow
 
-Camera → Upload video to TrueNAS via API → Create ProcessingJob (video + profile) → Celery task → SCP video to laptop temp dir → YOLO+BoT-SORT (person/ball) + YOLOv8m-pose (skeleton) + best.pt (hoop) → ReID match to profile embeddings → Possession tracking → Event detection (made baskets, steals, assists) → FFmpeg clip extraction → SCP clips back to TrueNAS → Highlight + Stat records → PostgreSQL → API → Frontend
+Camera → Upload video to TrueNAS via API → Create ProcessingJob (video + profile, optional team_id) → Celery task → SCP video to laptop temp dir → YOLO+BoT-SORT (person/ball) + YOLOv8m-pose (skeleton) + best.pt (hoop) → Pipeline loads team-specific photos/colors/jersey when team_id is set on job, falls back to legacy Profile data (ProfilePhoto, profile-level jersey/colors) if no team → ReID match to profile/team embeddings → Possession tracking → Court keypoint detection (every 30 frames) → homography → court_x/court_y per event → Action classification (MViT v2-S, 16-frame player crops) → Event detection (made baskets, steals, assists) → FFmpeg clip extraction → SCP clips back to TrueNAS → Highlight + Stat records (with court_x/court_y) → PostgreSQL → API → Frontend (ShotChart D3 viz on job page)
 
 ## Known Issues / Workarounds (Python 3.14 + Windows 11)
 
@@ -187,7 +197,7 @@ Changes in these areas have high blast radius — always run impact analysis:
 
 ```
 backend/app/models/*            → schemas, routes, workers, frontend types
-backend/app/models/team.py      → schemas, routes (profiles/teams), workers, frontend types
+backend/app/models/team.py      → TeamPhoto model, schemas, routes (profiles/teams, team photos), workers, frontend types
 backend/app/schemas/*           → routes, frontend api.ts, frontend types
 backend/app/services/inference/* → pipeline.py, workers/tasks.py
 backend/app/workers/tasks.py    → routes/videos.py (trigger endpoint)
@@ -196,6 +206,8 @@ frontend/src/lib/api.ts         → all pages + components that fetch data
 docker-compose.yml              → all services, env vars, STORAGE_BASE_PATH
 backend/app/services/video/*    → uploads, clip export, remote storage (SCP)
 backend/app/services/inference/reid.py → pipeline.py, routes/profiles.py
+backend/app/services/inference/court_detector.py → pipeline.py → court_x/court_y in events → tasks.py → Stat → frontend ShotChart
+backend/app/services/inference/action_classifier.py → pipeline.py → action metadata in events → Highlight/Stat
 ```
 
 ### Commit Discipline
