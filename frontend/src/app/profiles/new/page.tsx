@@ -11,8 +11,6 @@ export default function NewProfilePage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [jerseyNumber, setJerseyNumber] = useState("");
-  const [teamColorPrimary, setTeamColorPrimary] = useState("");
-  const [teamColorSecondary, setTeamColorSecondary] = useState("");
   const [photos, setPhotos] = useState<File[]>([]);
   const [creating, setCreating] = useState(false);
   const [uploadingPhotos, setUploadingPhotos] = useState(false);
@@ -28,8 +26,6 @@ export default function NewProfilePage() {
         name: name.trim(),
         user_id: USER_ID,
         jersey_number: jerseyNumber ? parseInt(jerseyNumber) : undefined,
-        team_color_primary: teamColorPrimary || undefined,
-        team_color_secondary: teamColorSecondary || undefined,
       })) as Profile;
 
       if (photos.length > 0) {
@@ -39,7 +35,7 @@ export default function NewProfilePage() {
         }
       }
 
-      router.push("/dashboard");
+      router.push(`/profiles/${profile.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create profile");
       setCreating(false);
@@ -82,35 +78,6 @@ export default function NewProfilePage() {
             className="w-32 px-4 py-2 bg-gray-900 rounded-lg border border-gray-700 focus:border-orange-500 focus:outline-none"
           />
           <p className="text-gray-500 text-xs mt-1">Helps the AI confirm player identity via jersey OCR.</p>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium mb-2">Team Jersey Colors</label>
-          <p className="text-gray-500 text-xs mb-3">
-            Describe the jersey colors so the AI can classify teams (e.g. "white", "dark blue", "red and black").
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Primary color</label>
-              <input
-                value={teamColorPrimary}
-                onChange={(e) => setTeamColorPrimary(e.target.value)}
-                type="text"
-                placeholder="e.g. white"
-                className="w-full px-4 py-2 bg-gray-900 rounded-lg border border-gray-700 focus:border-orange-500 focus:outline-none text-sm"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Secondary color (optional)</label>
-              <input
-                value={teamColorSecondary}
-                onChange={(e) => setTeamColorSecondary(e.target.value)}
-                type="text"
-                placeholder="e.g. blue"
-                className="w-full px-4 py-2 bg-gray-900 rounded-lg border border-gray-700 focus:border-orange-500 focus:outline-none text-sm"
-              />
-            </div>
-          </div>
         </div>
 
         <div>
@@ -158,6 +125,10 @@ export default function NewProfilePage() {
         >
           {uploadingPhotos ? "Uploading photos..." : creating ? "Creating..." : "Create Profile"}
         </button>
+
+        <p className="text-gray-500 text-xs text-center">
+          After creating the profile, you can add teams and jersey colors on the next page.
+        </p>
       </div>
     </div>
   );
