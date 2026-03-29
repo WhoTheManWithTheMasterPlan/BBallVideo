@@ -208,6 +208,7 @@ backend/app/services/video/*    → uploads, clip export, remote storage (SCP)
 backend/app/services/inference/reid.py → pipeline.py, routes/profiles.py
 backend/app/services/inference/court_detector.py → pipeline.py → court_x/court_y in events → tasks.py → Stat → frontend ShotChart
 backend/app/services/inference/action_classifier.py → pipeline.py → action metadata in events → Highlight/Stat
+backend/app/services/inference/event_classifier.py → pipeline.py → parallel event detection (block/rebound/hustle) → Highlight/Stat
 ```
 
 ### Activity Logging (REQUIRED for all frontend changes)

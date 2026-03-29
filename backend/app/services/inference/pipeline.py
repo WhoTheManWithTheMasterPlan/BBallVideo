@@ -43,6 +43,8 @@ class PlayerInfo:
     last_pose_confidence: float = 0.0
     last_action: str | None = None  # MViT v2-S action: "shoot", "dribble", "pass", etc.
     last_action_confidence: float = 0.0
+    last_event: str | None = None  # Event classifier: "made_basket", "block", etc.
+    last_event_confidence: float = 0.0
 
 
 class InferencePipeline:
@@ -88,8 +90,23 @@ class InferencePipeline:
         except Exception as e:
             logger.warning(f"Action classifier not available: {e}")
 
-        # Per-player frame crop buffers for action classification (16-frame sliding window)
+        # Event classifier (MViT v2-S — 7 game event classes, parallel detector)
+        self.event_classifier = None
+        try:
+            from app.services.inference.event_classifier import EventClassifier
+            self.event_classifier = EventClassifier()
+            logger.info("Event classifier enabled")
+        except Exception as e:
+            logger.warning(f"Event classifier not available: {e}")
+
+        # Per-player frame crop buffers for action + event classification (16-frame sliding window)
         self._player_crop_buffers: dict[int, deque] = {}
+        # Separate buffer for event classifier (runs on full-frame crops, not player crops)
+        self._event_frame_buffer: deque = deque(maxlen=16)
+        # Cooldown tracking for event classifier to avoid duplicate detections
+        self._event_classifier_cooldowns: dict[str, float] = {}  # event_type -> last_timestamp
+        # Collected ML-based events from event classifier
+        self._ml_events: list[BasketballEvent] = []
 
         # Court detector (YOLOv8-pose — court keypoint detection for shot chart)
         self.court_detector = None
@@ -364,6 +381,44 @@ class InferencePipeline:
                         except Exception:
                             pass  # Don't break pipeline on classifier errors
 
+            # Event classifier (MViT v2-S, parallel detector for blocks/rebounds/hustles)
+            # Uses full-frame center crops (not player crops) since events involve multiple players
+            if self.event_classifier and frame_idx % 2 == 0:  # Every other frame to save compute
+                self._event_frame_buffer.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                if len(self._event_frame_buffer) == 16:
+                    try:
+                        event_name, conf = self.event_classifier.classify(
+                            list(self._event_frame_buffer)
+                        )
+                        if (self.event_classifier.should_emit(event_name, conf)
+                                and event_name != "nothing"):
+                            # Cooldown: don't emit same event type within 4 seconds
+                            last_ts = self._event_classifier_cooldowns.get(event_name, -999)
+                            if timestamp - last_ts > 4.0:
+                                self._event_classifier_cooldowns[event_name] = timestamp
+                                # Find the most relevant player (possession holder or target)
+                                player_id = -1
+                                if possession and possession.holder_track_id >= 0:
+                                    player_id = possession.holder_track_id
+                                self._ml_events.append(BasketballEvent(
+                                    event_type=event_name,
+                                    frame_idx=frame_idx,
+                                    timestamp=timestamp,
+                                    player_track_id=player_id,
+                                    confidence=conf,
+                                    metadata={"source": "event_classifier"},
+                                ))
+                                logger.info(
+                                    f"Event classifier: {event_name} at {timestamp:.1f}s "
+                                    f"(conf={conf:.2f}, player={player_id})"
+                                )
+                    except Exception:
+                        pass
+                    # Slide window by 8 frames (50% overlap) instead of clearing completely
+                    for _ in range(8):
+                        if self._event_frame_buffer:
+                            self._event_frame_buffer.popleft()
+
             # Heuristic event detection (trajectory + Kalman)
             events = self.event_detector.update(frame_idx, timestamp, detections, possession)
 
@@ -526,11 +581,16 @@ class InferencePipeline:
                     metadata=metadata,
                 ))
 
-        # Merge heuristic + classifier events (deduplicate within 6 seconds)
+        # Merge heuristic + scoring classifier events (deduplicate within 6 seconds)
         all_events = self._merge_events(heuristic_events, classifier_events, gap_seconds=6.0)
+
+        # Merge in event classifier (ML) events
+        if self._ml_events:
+            all_events = self._merge_ml_events(all_events, self._ml_events, gap_seconds=4.0)
 
         logger.info(f"Pipeline complete: {len(heuristic_events)} heuristic events, "
                    f"{len(classifier_events)} classifier events, "
+                   f"{len(self._ml_events)} ML events, "
                    f"{len(all_events)} merged events")
 
         # Filter events to target profile's track IDs
@@ -585,6 +645,14 @@ class InferencePipeline:
                         e.metadata["rescue_reason"] = "target_near_rebound"
                         filtered.append(e)
                         logger.info(f"Rescued rebound at {e.timestamp:.1f}s — target track {target_rebounder} near event")
+                elif e.event_type in ("block", "hustle"):
+                    # ML-only event types — rescue if target was near the event
+                    target_near = self._find_target_near_event(e.frame_idx, window=90)
+                    if target_near is not None:
+                        e.player_track_id = target_near
+                        e.metadata["rescue_reason"] = "target_near_ml_event"
+                        filtered.append(e)
+                        logger.info(f"Rescued {e.event_type} at {e.timestamp:.1f}s — target track {target_near} near event")
             logger.info(f"Filtered to target: {len(filtered)} of {len(all_events)} events, "
                        f"{len(self.target_track_ids)} target tracks")
             return filtered
@@ -680,6 +748,51 @@ class InferencePipeline:
 
         # Otherwise pick the closest candidate
         return min(candidates, key=lambda x: x[1])[0]
+
+    def _merge_ml_events(
+        self,
+        existing: list[BasketballEvent],
+        ml_events: list[BasketballEvent],
+        gap_seconds: float = 4.0,
+    ) -> list[BasketballEvent]:
+        """Merge event classifier detections with existing (heuristic + scoring) events.
+
+        For overlapping event types (made_basket, steal, assist):
+          - If ML confirms a heuristic event within gap_seconds, boost confidence + tag
+          - If ML event has no heuristic match, add as new event (ML-only)
+        For ML-only event types (block, rebound, hustle):
+          - Always add (heuristics can't detect these)
+        """
+        # Event types that heuristics can also detect
+        overlap_types = {"made_basket", "steal", "assist", "rebound"}
+
+        for ml_event in ml_events:
+            if ml_event.event_type in overlap_types:
+                # Check if heuristics already found this event
+                matched = False
+                for existing_event in existing:
+                    if (existing_event.event_type == ml_event.event_type
+                            and abs(existing_event.timestamp - ml_event.timestamp) < gap_seconds):
+                        # Confirm — boost confidence and tag
+                        if ml_event.confidence > existing_event.confidence:
+                            existing_event.confidence = ml_event.confidence
+                        existing_event.metadata["event_classifier_confirmed"] = True
+                        existing_event.metadata["event_classifier_confidence"] = ml_event.confidence
+                        matched = True
+                        break
+                if not matched:
+                    # ML-only detection for an overlap type — add it
+                    ml_event.metadata["source"] = "event_classifier_only"
+                    existing.append(ml_event)
+                    logger.info(f"ML-only {ml_event.event_type} at {ml_event.timestamp:.1f}s "
+                               f"(conf={ml_event.confidence:.2f})")
+            else:
+                # block, hustle — heuristics can't detect these, always add
+                ml_event.metadata["source"] = "event_classifier"
+                existing.append(ml_event)
+
+        existing.sort(key=lambda e: e.timestamp)
+        return existing
 
     def _merge_events(self, heuristic: list[BasketballEvent],
                       classifier: list[BasketballEvent],
