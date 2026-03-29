@@ -9,7 +9,10 @@ Extracts COCO skeleton keypoints and classifies poses as:
 Uses yolov8m-pose (medium) to keep VRAM in check alongside YOLOv8x detection + hoop model.
 """
 
-import ml.patch_platform  # noqa: F401  — must be first import (WMI hang workaround)
+try:
+    import ml.patch_platform  # noqa: F401  — must be first import (WMI hang workaround)
+except ImportError:
+    pass
 
 import logging
 from dataclasses import dataclass

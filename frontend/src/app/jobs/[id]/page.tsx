@@ -84,6 +84,7 @@ export default function JobDetailPage() {
     made_basket: "Made Basket",
     steal: "Steal",
     assist: "Assist",
+    rebound: "Rebound",
   };
 
   return (
@@ -157,7 +158,7 @@ export default function JobDetailPage() {
               >
                 All
               </button>
-              {["made_basket", "steal", "assist"].map((type) => (
+              {["made_basket", "steal", "assist", "rebound"].map((type) => (
                 <button
                   key={type}
                   onClick={() => setFilterType(type)}

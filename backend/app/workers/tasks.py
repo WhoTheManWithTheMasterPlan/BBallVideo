@@ -18,6 +18,23 @@ from app.workers.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_metadata(metadata: dict) -> dict:
+    """Convert numpy types to Python natives for JSON serialization."""
+    clean = {}
+    for k, v in metadata.items():
+        if isinstance(v, (np.floating, np.float32, np.float64)):
+            clean[k] = float(v)
+        elif isinstance(v, (np.integer, np.int32, np.int64)):
+            clean[k] = int(v)
+        elif isinstance(v, np.ndarray):
+            clean[k] = v.tolist()
+        elif isinstance(v, dict):
+            clean[k] = _sanitize_metadata(v)
+        else:
+            clean[k] = v
+    return clean
+
+
 @celery_app.task(bind=True, name="process_video")
 def process_video(self, job_id: str):
     """
@@ -30,6 +47,14 @@ def process_video(self, job_id: str):
     5. Write Highlight + Stat records to DB
     6. Update job status
     """
+    # Patch platform before any ML imports (WMI hang on Win11+Py3.14)
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))  # project root
+    try:
+        import ml.patch_platform  # noqa: F401
+    except ImportError:
+        pass
+
     # Lazy imports — ML libs only available on the GPU worker
     from app.services.video.storage import get_file_path
     from app.services.video.clipper import extract_clip, extract_thumbnail
@@ -74,13 +99,47 @@ def process_video(self, job_id: str):
         color_secondary = None
         jersey_number = profile.jersey_number  # legacy fallback
 
+        # Lazy-init ReID extractor for computing missing embeddings
+        reid_extractor = None
+
+        def _ensure_embedding(photo_record):
+            """Compute and persist embedding if missing. Returns embedding ndarray or None."""
+            nonlocal reid_extractor
+            if photo_record.reid_embedding:
+                return np.frombuffer(photo_record.reid_embedding, dtype=np.float32)
+            # Embedding missing (uploaded via API server without ML libs) — compute on GPU worker
+            try:
+                if reid_extractor is None:
+                    from app.services.inference.reid import ReIDExtractor
+                    reid_extractor = ReIDExtractor()
+                # Get photo bytes — download from TrueNAS if remote worker
+                if settings.remote_storage_enabled:
+                    from app.services.video.remote_storage import download_file
+                    local_tmp = Path(tempfile.mkdtemp(prefix="bballvideo_photo_")) / Path(photo_record.file_key).name
+                    download_file(photo_record.file_key, str(local_tmp))
+                    image_bytes = local_tmp.read_bytes()
+                    local_tmp.unlink(missing_ok=True)
+                else:
+                    photo_path = get_file_path(photo_record.file_key)
+                    image_bytes = Path(photo_path).read_bytes()
+                emb_bytes = reid_extractor.extract_from_bytes(image_bytes)
+                if emb_bytes:
+                    photo_record.reid_embedding = emb_bytes
+                    session.add(photo_record)
+                    session.commit()
+                    logger.info(f"Computed missing ReID embedding for photo {photo_record.id}")
+                    return np.frombuffer(emb_bytes, dtype=np.float32)
+            except Exception as e:
+                logger.warning(f"Failed to compute embedding for photo {photo_record.id}: {e}")
+            return None
+
         if job.team_id:
             team = session.get(Team, job.team_id)
             if team:
-                # Load team-specific photo embeddings
+                # Load team-specific photo embeddings (compute if missing)
                 for photo in team.photos:
-                    if photo.reid_embedding:
-                        emb = np.frombuffer(photo.reid_embedding, dtype=np.float32)
+                    emb = _ensure_embedding(photo)
+                    if emb is not None:
                         profile_embeddings.append(emb)
                 color_primary = team.color_primary
                 color_secondary = team.color_secondary
@@ -91,8 +150,8 @@ def process_video(self, job_id: str):
         # Fall back to legacy profile photos if no team photos
         if not profile_embeddings:
             for photo in profile.photos:
-                if photo.reid_embedding:
-                    emb = np.frombuffer(photo.reid_embedding, dtype=np.float32)
+                emb = _ensure_embedding(photo)
+                if emb is not None:
                     profile_embeddings.append(emb)
 
         # Fall back to legacy profile colors
@@ -189,7 +248,7 @@ def process_video(self, job_id: str):
                     file_key=clip_file_key,
                     thumbnail_file_key=thumb_file_key,
                     confidence=event.confidence,
-                    metadata_=event.metadata,
+                    metadata_=_sanitize_metadata(event.metadata),
                 )
                 session.add(highlight)
 
@@ -198,9 +257,9 @@ def process_video(self, job_id: str):
                     job_id=uuid.UUID(job_id),
                     event_type=event.event_type,
                     timestamp=event.timestamp,
-                    court_x=event.metadata.get("court_x"),
-                    court_y=event.metadata.get("court_y"),
-                    metadata_=event.metadata,
+                    court_x=float(event.metadata["court_x"]) if event.metadata.get("court_x") is not None else None,
+                    court_y=float(event.metadata["court_y"]) if event.metadata.get("court_y") is not None else None,
+                    metadata_=_sanitize_metadata(event.metadata),
                 )
                 session.add(stat)
                 highlights_written += 1

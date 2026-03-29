@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class BasketballEvent:
-    event_type: str  # "made_basket", "steal", "assist"
+    event_type: str  # "made_basket", "steal", "assist", "rebound"
     frame_idx: int
     timestamp: float
     player_track_id: int
@@ -232,17 +232,20 @@ class ShotTracker:
 
 
 class EventDetector:
-    """Detects made baskets, steals, and assists from possession + detection data."""
+    """Detects made baskets, steals, assists, and rebounds from possession + detection data."""
 
     STEAL_COOLDOWN_FRAMES = 60  # Don't detect steals within N frames of each other
     ASSIST_WINDOW_FRAMES = 150  # ~5 seconds at 30fps — pass before basket = assist
-    BASKET_COOLDOWN_FRAMES = 60  # ~2 seconds between baskets (was 90)
+    BASKET_COOLDOWN_FRAMES = 180  # ~6 seconds between baskets at 30fps
+    REBOUND_COOLDOWN_FRAMES = 90  # ~3 seconds between rebounds
+    REBOUND_WINDOW_FRAMES = 150  # Look back 5 seconds for a missed shot
 
     def __init__(self):
         self.shot_tracker = ShotTracker()
         self.possession_history: deque = deque(maxlen=300)  # (frame_idx, PossessionState)
         self._last_steal_frame = -999
         self._last_made_basket_frame = -999
+        self._last_rebound_frame = -999
 
     def update(
         self,
@@ -288,7 +291,58 @@ class EventDetector:
         if steal_event:
             events.append(steal_event)
 
+        # Check for rebound (ball in air for extended period, then new holder)
+        rebound_event = self._check_rebound(frame_idx, timestamp, possession)
+        if rebound_event:
+            events.append(rebound_event)
+
         return events
+
+    def _check_rebound(
+        self, frame_idx: int, timestamp: float, possession: PossessionState
+    ) -> BasketballEvent | None:
+        """Detect rebound: ball was in air for extended time, then someone grabs it.
+
+        A rebound is: ball_status was 'in_air' for 15+ frames in the last 5 seconds,
+        and now a player has just gained possession (frames_held crossing MIN_FRAMES threshold).
+        """
+        if (frame_idx - self._last_rebound_frame) < self.REBOUND_COOLDOWN_FRAMES:
+            return None
+
+        # Need a holder who just confirmed possession
+        if possession.holder_track_id < 0 or possession.frames_held != 1:
+            return None
+
+        # Count recent air frames in the last 5 seconds
+        recent_air_frames = 0
+        for hist_frame, ps in reversed(self.possession_history):
+            if frame_idx - hist_frame > self.REBOUND_WINDOW_FRAMES:
+                break
+            if ps.ball_status == "in_air":
+                recent_air_frames += 1
+
+        # Need 15+ air frames (~0.5s of ball in air) — indicates a missed shot or loose ball
+        if recent_air_frames >= 15:
+            # Don't log as rebound if we just logged a made basket (ball goes through net = in_air)
+            if (frame_idx - self._last_made_basket_frame) < 90:
+                return None
+
+            self._last_rebound_frame = frame_idx
+            rebounder_id = possession.holder_track_id
+            logger.info(f"Rebound detected at frame {frame_idx} "
+                       f"(t={timestamp:.1f}s, rebounder=track_{rebounder_id})")
+            return BasketballEvent(
+                event_type="rebound",
+                frame_idx=frame_idx,
+                timestamp=timestamp,
+                player_track_id=rebounder_id,
+                confidence=0.6,
+                metadata={
+                    "rebounder_track_id": rebounder_id,
+                    "air_frames": recent_air_frames,
+                },
+            )
+        return None
 
     def _check_steal(
         self, frame_idx: int, timestamp: float, possession: PossessionState
@@ -303,7 +357,7 @@ class EventDetector:
             and possession.holder_team is not None
             and possession.last_holder_team is not None
             and possession.holder_team != possession.last_holder_team
-            and possession.frames_held == 0  # Just changed
+            and possession.frames_held <= 3  # Recently changed (within confirmation window)
         ):
             # Check that ball wasn't "in_air" for too long (would be a rebound, not steal)
             recent_air_frames = sum(
@@ -329,20 +383,34 @@ class EventDetector:
     def _check_assist(
         self, frame_idx: int, timestamp: float, scorer_track_id: int
     ) -> BasketballEvent | None:
-        """Check if there was a same-team pass leading to this made basket."""
+        """Check if there was a same-team pass leading to this made basket.
+
+        Looks back through possession history for a different same-team player
+        who held the ball before the scorer, allowing for brief 'in_air' gaps
+        between pass and reception.
+        """
         scorer_team = None
         prev_holder = None
+        seen_scorer = False
 
         for hist_frame, ps in reversed(self.possession_history):
             if frame_idx - hist_frame > self.ASSIST_WINDOW_FRAMES:
                 break
 
+            # Identify the scorer's team
             if ps.holder_track_id == scorer_track_id and scorer_team is None:
                 scorer_team = ps.holder_team
+                seen_scorer = True
 
-            # Found a different player on the same team who had the ball before the scorer
+            # Also check last_holder — the passer might show up there during 'in_air' phase
+            if scorer_team is None and ps.last_holder_track_id == scorer_track_id:
+                scorer_team = ps.last_holder_team
+                seen_scorer = True
+
+            # Found a different player on the same team who had the ball
             if (
-                scorer_team
+                seen_scorer
+                and scorer_team
                 and ps.holder_track_id != scorer_track_id
                 and ps.holder_track_id >= 0
                 and ps.holder_team == scorer_team
@@ -350,7 +418,20 @@ class EventDetector:
                 prev_holder = ps.holder_track_id
                 break
 
+            # Also check last_holder for the passer
+            if (
+                seen_scorer
+                and scorer_team
+                and ps.last_holder_track_id != scorer_track_id
+                and ps.last_holder_track_id >= 0
+                and ps.last_holder_team == scorer_team
+            ):
+                prev_holder = ps.last_holder_track_id
+                break
+
         if prev_holder is not None and prev_holder != scorer_track_id:
+            logger.info(f"Assist detected at frame {frame_idx} "
+                       f"(t={timestamp:.1f}s, assister=track_{prev_holder}, scorer=track_{scorer_track_id})")
             return BasketballEvent(
                 event_type="assist",
                 frame_idx=frame_idx,

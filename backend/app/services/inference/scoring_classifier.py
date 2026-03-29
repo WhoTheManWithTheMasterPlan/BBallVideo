@@ -38,7 +38,8 @@ class ScoringClassifier:
         # Resolve weights path
         if weights_path is None:
             # Try relative to project root
-            candidate = Path(__file__).parent.parent.parent.parent / DEFAULT_WEIGHTS
+            # 5 parents: scoring_classifier.py → inference → services → app → backend → project root
+            candidate = Path(__file__).parent.parent.parent.parent.parent / DEFAULT_WEIGHTS
             if candidate.exists():
                 weights_path = str(candidate)
             else:

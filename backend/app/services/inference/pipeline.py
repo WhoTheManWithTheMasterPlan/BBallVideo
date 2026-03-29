@@ -135,7 +135,10 @@ class InferencePipeline:
             return
 
         # ReID matching to target profile (every 15 frames until matched)
+        # Skip ReID for players classified as opponents (team color pre-filter)
         if not player.is_target and det.frame_idx % 15 == 0:
+            if player.team_name == "opponent":
+                return  # Don't waste ReID on known opponents
             embedding = self.reid_extractor.extract_embedding(crop)
             match = self.reid_matcher.match(embedding)
             if match:
@@ -206,6 +209,9 @@ class InferencePipeline:
         last_hoop_bbox: tuple[float, float, float, float] | None = None
         # Current homography matrix for court mapping
         current_H: np.ndarray | None = None
+        # Store homography + player bboxes per frame for post-loop classifier event enrichment
+        frame_homographies: dict[int, np.ndarray] = {}  # frame_idx -> H
+        frame_player_bboxes: dict[int, dict[int, tuple]] = {}  # frame_idx -> {track_id -> bbox}
 
         for frame_idx, detections, frame in self.detector.process_video(video_path, vid_stride=vid_stride):
             actual_frame = frame_idx * vid_stride
@@ -269,6 +275,13 @@ class InferencePipeline:
                 except Exception:
                     pass  # Don't break pipeline on court detection errors
 
+            # Store homography + player bboxes for post-loop enrichment (every 30 frames)
+            if current_H is not None and frame_idx % 30 == 0:
+                frame_homographies[frame_idx] = current_H.copy()
+            person_dets_all = [d for d in detections if d.class_name == "person" and d.track_id >= 0]
+            if person_dets_all:
+                frame_player_bboxes[frame_idx] = {d.track_id: d.bbox for d in person_dets_all}
+
             # Action classification (MViT v2-S, every 16 frames per player)
             if self.action_classifier:
                 person_dets = [d for d in detections if d.class_name == "person" and d.track_id >= 0]
@@ -326,6 +339,10 @@ class InferencePipeline:
             heuristic_events.extend(events)
 
             # Log progress every 1000 processed frames
+            # TODO: Push progress (pct, events count) to ProcessingJob.progress field
+            # so frontend can poll /api/v1/jobs/{id} and show a real progress bar
+            # instead of just "processing". Update via Celery task self.update_state()
+            # or direct DB write from pipeline callback.
             if frame_idx > 0 and frame_idx % 1000 == 0:
                 pct = (frame_idx / total_processed * 100) if total_processed > 0 else 0
                 logger.info(f"Frame {frame_idx}/{total_processed} ({pct:.1f}%) — "
@@ -344,13 +361,54 @@ class InferencePipeline:
             for peak in scoring_peaks:
                 # Find the closest possession holder at the time of the basket
                 scorer_id = self._find_scorer_at_frame(peak["frame_idx"])
+                metadata = {"source": "classifier", "scorer_track_id": scorer_id}
+
+                # Enrich with action data from player cache
+                if scorer_id in self.players:
+                    player = self.players[scorer_id]
+                    if player.last_action:
+                        metadata["action"] = player.last_action
+                        metadata["action_confidence"] = player.last_action_confidence
+                    if player.last_pose:
+                        metadata["pose"] = player.last_pose
+                        metadata["pose_confidence"] = player.last_pose_confidence
+
+                # Enrich with court coordinates from stored homographies
+                if self.court_detector and scorer_id >= 0:
+                    # Find nearest stored homography
+                    best_h_frame = None
+                    best_h_dist = float("inf")
+                    for h_frame in frame_homographies:
+                        dist = abs(h_frame - peak["frame_idx"])
+                        if dist < best_h_dist:
+                            best_h_dist = dist
+                            best_h_frame = h_frame
+                    if best_h_frame is not None and best_h_dist < 60:  # Within ~2s
+                        H = frame_homographies[best_h_frame]
+                        # Find nearest stored bbox for this scorer
+                        best_bbox_frame = None
+                        best_bbox_dist = float("inf")
+                        for b_frame in frame_player_bboxes:
+                            if scorer_id in frame_player_bboxes[b_frame]:
+                                dist = abs(b_frame - peak["frame_idx"])
+                                if dist < best_bbox_dist:
+                                    best_bbox_dist = dist
+                                    best_bbox_frame = b_frame
+                        if best_bbox_frame is not None and best_bbox_dist < 60:
+                            bbox = frame_player_bboxes[best_bbox_frame][scorer_id]
+                            foot_x, foot_y = self.court_detector.get_foot_position(bbox)
+                            court_pos = self.court_detector.pixel_to_court(H, foot_x, foot_y)
+                            if court_pos:
+                                metadata["court_x"] = court_pos[0]
+                                metadata["court_y"] = court_pos[1]
+
                 classifier_events.append(BasketballEvent(
                     event_type="made_basket",
                     frame_idx=peak["frame_idx"],
                     timestamp=peak["timestamp"],
                     player_track_id=scorer_id,
                     confidence=peak["confidence"],
-                    metadata={"source": "classifier", "scorer_track_id": scorer_id},
+                    metadata=metadata,
                 ))
 
         # Merge heuristic + classifier events (deduplicate within 3 seconds)
@@ -404,10 +462,14 @@ class InferencePipeline:
             for existing in all_events:
                 if (existing.event_type == "made_basket"
                         and abs(existing.timestamp - c_event.timestamp) < gap_seconds):
-                    # Overlap — keep higher confidence
+                    # Overlap — merge: keep heuristic metadata, boost confidence if classifier is higher
                     if c_event.confidence > existing.confidence:
                         existing.confidence = c_event.confidence
-                        existing.metadata["classifier_confirmed"] = True
+                    existing.metadata["classifier_confirmed"] = True
+                    # Backfill court coords from classifier if heuristic didn't have them
+                    if "court_x" not in existing.metadata and "court_x" in c_event.metadata:
+                        existing.metadata["court_x"] = c_event.metadata["court_x"]
+                        existing.metadata["court_y"] = c_event.metadata["court_y"]
                     is_duplicate = True
                     break
 

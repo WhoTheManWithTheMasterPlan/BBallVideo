@@ -155,7 +155,7 @@ class ReIDExtractor:
 class ReIDMatcher:
     """Matches detected players to known roster players using embedding similarity."""
 
-    def __init__(self, match_threshold: float = 0.6):
+    def __init__(self, match_threshold: float = 0.75):
         self.match_threshold = match_threshold
         self.roster_embeddings: dict[str, np.ndarray] = {}  # player_id -> embedding
         self.roster_info: dict[str, dict] = {}  # player_id -> {name, jersey_number, team_name}
