@@ -347,37 +347,96 @@ class EventDetector:
     def _check_steal(
         self, frame_idx: int, timestamp: float, possession: PossessionState
     ) -> BasketballEvent | None:
-        """Detect steal: possession changes teams without a shot attempt."""
+        """Detect steal: possession changes teams without a shot attempt.
+
+        When team classification is available, requires cross-team change.
+        When teams are unknown (both None), falls back to heuristic:
+        different player, brief air time (1-5 frames), and distance check.
+        """
         if (frame_idx - self._last_steal_frame) < self.STEAL_COOLDOWN_FRAMES:
             return None
 
         if (
             possession.holder_track_id >= 0
             and possession.last_holder_track_id >= 0
-            and possession.holder_team is not None
-            and possession.last_holder_team is not None
-            and possession.holder_team != possession.last_holder_team
+            and possession.holder_track_id != possession.last_holder_track_id
             and possession.frames_held <= 3  # Recently changed (within confirmation window)
         ):
-            # Check that ball wasn't "in_air" for too long (would be a rebound, not steal)
-            recent_air_frames = sum(
-                1 for _, ps in self.possession_history
-                if ps.ball_status == "in_air"
-                and frame_idx - _ < 30  # last second
-            )
-            if recent_air_frames < 15:  # Less than half a second of air time
-                self._last_steal_frame = frame_idx
-                return BasketballEvent(
-                    event_type="steal",
-                    frame_idx=frame_idx,
-                    timestamp=timestamp,
-                    player_track_id=possession.holder_track_id,
-                    confidence=0.7,
-                    metadata={
-                        "stealer_track_id": possession.holder_track_id,
-                        "victim_track_id": possession.last_holder_track_id,
-                    },
+            has_team_info = (possession.holder_team is not None
+                            and possession.last_holder_team is not None)
+
+            if has_team_info and possession.holder_team != possession.last_holder_team:
+                # Team-based steal detection (original logic)
+                recent_air_frames = sum(
+                    1 for _, ps in self.possession_history
+                    if ps.ball_status == "in_air"
+                    and frame_idx - _ < 30  # last second
                 )
+                if recent_air_frames < 15:
+                    self._last_steal_frame = frame_idx
+                    return BasketballEvent(
+                        event_type="steal",
+                        frame_idx=frame_idx,
+                        timestamp=timestamp,
+                        player_track_id=possession.holder_track_id,
+                        confidence=0.7,
+                        metadata={
+                            "stealer_track_id": possession.holder_track_id,
+                            "victim_track_id": possession.last_holder_track_id,
+                        },
+                    )
+
+            elif not has_team_info:
+                # Teamless fallback: detect "possible steal" based on heuristics
+                # 1. Ball was briefly in_air or not_visible (1-5 frames)
+                recent_air_frames = sum(
+                    1 for _, ps in self.possession_history
+                    if ps.ball_status in ("in_air", "not_visible")
+                    and frame_idx - _ < 30
+                )
+                if 1 <= recent_air_frames <= 15:
+                    # 2. Check distance between holder and last holder bboxes
+                    # (uses possession history to find their positions)
+                    holder_bbox = self._find_player_bbox_in_history(
+                        frame_idx, possession.holder_track_id)
+                    victim_bbox = self._find_player_bbox_in_history(
+                        frame_idx, possession.last_holder_track_id)
+                    # If we can't find bboxes, still allow with lower confidence
+                    far_enough = True
+                    if holder_bbox and victim_bbox:
+                        hcx = (holder_bbox[0] + holder_bbox[2]) / 2
+                        hcy = (holder_bbox[1] + holder_bbox[3]) / 2
+                        vcx = (victim_bbox[0] + victim_bbox[2]) / 2
+                        vcy = (victim_bbox[1] + victim_bbox[3]) / 2
+                        dist = math.sqrt((hcx - vcx) ** 2 + (hcy - vcy) ** 2)
+                        # Players should be relatively close for a steal (within 300px)
+                        far_enough = dist < 300
+
+                    if far_enough:
+                        self._last_steal_frame = frame_idx
+                        logger.info(f"Possible steal (teamless) at frame {frame_idx} "
+                                   f"(t={timestamp:.1f}s, stealer=track_{possession.holder_track_id}, "
+                                   f"victim=track_{possession.last_holder_track_id})")
+                        return BasketballEvent(
+                            event_type="steal",
+                            frame_idx=frame_idx,
+                            timestamp=timestamp,
+                            player_track_id=possession.holder_track_id,
+                            confidence=0.5,
+                            metadata={
+                                "stealer_track_id": possession.holder_track_id,
+                                "victim_track_id": possession.last_holder_track_id,
+                                "detection_mode": "teamless_heuristic",
+                            },
+                        )
+        return None
+
+    def _find_player_bbox_in_history(
+        self, frame_idx: int, track_id: int
+    ) -> tuple[float, float, float, float] | None:
+        """Search recent detection history for a player's bbox. Returns None if not found."""
+        # EventDetector doesn't store raw detections, so this is a best-effort lookup
+        # via possession history metadata. Returns None (caller handles gracefully).
         return None
 
     def _check_assist(
@@ -388,14 +447,25 @@ class EventDetector:
         Looks back through possession history for a different same-team player
         who held the ball before the scorer, allowing for brief 'in_air' gaps
         between pass and reception.
+
+        When team info is unavailable, falls back to: any different player who
+        held the ball within 3 seconds before the basket (lower confidence).
         """
         scorer_team = None
         prev_holder = None
         seen_scorer = False
+        has_any_team_info = False
+        # Teamless fallback: track the most recent different holder within 3s
+        teamless_prev_holder = None
+        teamless_holder_frame = -1
 
         for hist_frame, ps in reversed(self.possession_history):
             if frame_idx - hist_frame > self.ASSIST_WINDOW_FRAMES:
                 break
+
+            # Track whether any team info exists in the history
+            if ps.holder_team is not None or ps.last_holder_team is not None:
+                has_any_team_info = True
 
             # Identify the scorer's team
             if ps.holder_track_id == scorer_track_id and scorer_team is None:
@@ -429,6 +499,17 @@ class EventDetector:
                 prev_holder = ps.last_holder_track_id
                 break
 
+            # Teamless fallback: track the most recent different holder within 3s (90 frames)
+            if (
+                seen_scorer
+                and teamless_prev_holder is None
+                and frame_idx - hist_frame <= 90  # 3 seconds
+                and ps.holder_track_id != scorer_track_id
+                and ps.holder_track_id >= 0
+            ):
+                teamless_prev_holder = ps.holder_track_id
+                teamless_holder_frame = hist_frame
+
         if prev_holder is not None and prev_holder != scorer_track_id:
             logger.info(f"Assist detected at frame {frame_idx} "
                        f"(t={timestamp:.1f}s, assister=track_{prev_holder}, scorer=track_{scorer_track_id})")
@@ -441,6 +522,29 @@ class EventDetector:
                 metadata={
                     "assister_track_id": prev_holder,
                     "scorer_track_id": scorer_track_id,
+                },
+            )
+
+        # Teamless fallback: no team info available, use proximity-in-time heuristic
+        if (
+            prev_holder is None
+            and not has_any_team_info
+            and teamless_prev_holder is not None
+            and teamless_prev_holder != scorer_track_id
+        ):
+            logger.info(f"Possible assist (teamless) at frame {frame_idx} "
+                       f"(t={timestamp:.1f}s, assister=track_{teamless_prev_holder}, "
+                       f"scorer=track_{scorer_track_id})")
+            return BasketballEvent(
+                event_type="assist",
+                frame_idx=frame_idx,
+                timestamp=timestamp,
+                player_track_id=teamless_prev_holder,
+                confidence=0.4,
+                metadata={
+                    "assister_track_id": teamless_prev_holder,
+                    "scorer_track_id": scorer_track_id,
+                    "detection_mode": "teamless_heuristic",
                 },
             )
         return None

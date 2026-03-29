@@ -7,7 +7,7 @@ before processing and uploads clips/thumbnails back after.
 
 import logging
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from app.core.config import settings
 
@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 def _scp_remote_path(file_key: str) -> str:
     """Build the scp remote path string: user@host:/path/to/file"""
-    remote = f"{settings.remote_storage_path}/{file_key}"
+    # Force forward slashes — file_key may contain backslashes on Windows
+    remote = f"{settings.remote_storage_path}/{file_key.replace(chr(92), '/')}"
     return f"{settings.remote_storage_user}@{settings.remote_storage_host}:{remote}"
 
 
@@ -46,8 +47,8 @@ def upload_file(local_path: str, file_key: str) -> None:
     if not local.exists():
         raise FileNotFoundError(f"Local file not found: {local_path}")
 
-    # Ensure remote directory exists
-    remote_dir = f"{settings.remote_storage_path}/{Path(file_key).parent}"
+    # Ensure remote directory exists (use PurePosixPath — remote is Linux)
+    remote_dir = f"{settings.remote_storage_path}/{PurePosixPath(file_key).parent}"
     ssh_target = f"{settings.remote_storage_user}@{settings.remote_storage_host}"
     mkdir_result = subprocess.run(
         ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes",

@@ -25,6 +25,12 @@ easyocr>=1.7
 opencv-python-headless>=4.10
 ffmpeg-python>=0.2
 
+# Ball tracking (Kalman filter interpolation)
+filterpy>=1.4
+
+# Signal processing (scoring event peak detection)
+scipy>=1.14
+
 # ReID (player re-identification)
 timm>=1.0
 

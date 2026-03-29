@@ -135,11 +135,15 @@ class CourtDetector:
             3x3 homography matrix, or None if insufficient keypoints.
         """
         if keypoints is None or len(keypoints) != len(COURT_REFERENCE_POINTS):
+            logger.debug("compute_homography: keypoints None or length mismatch, using last_valid_H")
             return self.last_valid_H
 
         # Filter to valid (non-zero) keypoints
         valid_mask = (keypoints[:, 0] > 0) & (keypoints[:, 1] > 0)
-        if np.sum(valid_mask) < 4:
+        valid_count = int(np.sum(valid_mask))
+        logger.debug(f"compute_homography: {valid_count} valid keypoints out of {len(keypoints)}")
+        if valid_count < 4:
+            logger.debug("compute_homography: <4 valid keypoints, falling back to last_valid_H")
             return self.last_valid_H
 
         src_pts = keypoints[valid_mask]
@@ -147,7 +151,11 @@ class CourtDetector:
 
         H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0, maxIters=2000)
         if H is None:
+            logger.debug("compute_homography: RANSAC failed (findHomography returned None), falling back to last_valid_H")
             return self.last_valid_H
+
+        inliers = int(np.sum(mask)) if mask is not None else 0
+        logger.debug(f"compute_homography: RANSAC succeeded, {inliers}/{valid_count} inliers")
 
         # Fix horizontal flip
         if np.linalg.det(H[:2, :2]) < 0:
@@ -158,7 +166,9 @@ class CourtDetector:
             src_pts.reshape(-1, 1, 2), H
         ).reshape(-1, 2)
         error = np.mean(np.linalg.norm(projected - dst_pts, axis=1))
+        logger.debug(f"compute_homography: reprojection error = {error:.2f}")
         if error > 40.0:
+            logger.debug(f"compute_homography: error {error:.2f} > 40.0, falling back to last_valid_H")
             return self.last_valid_H
 
         # Blend with previous for temporal smoothing
