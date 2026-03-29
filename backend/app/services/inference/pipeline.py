@@ -137,8 +137,8 @@ class InferencePipeline:
         # ReID matching to target profile (every 15 frames until matched)
         # Skip ReID for players classified as opponents (team color pre-filter)
         if not player.is_target and det.frame_idx % 15 == 0:
-            if player.team_name == "opponent":
-                return  # Don't waste ReID on known opponents
+            # TODO: Add jersey color selection at upload time so CLIP can pre-filter opponents
+            # For now, skip CLIP team filtering — rely on ReID threshold + jersey OCR only
             embedding = self.reid_extractor.extract_embedding(crop)
             match = self.reid_matcher.match(embedding)
             if match:
@@ -212,6 +212,9 @@ class InferencePipeline:
         # Store homography + player bboxes per frame for post-loop classifier event enrichment
         frame_homographies: dict[int, np.ndarray] = {}  # frame_idx -> H
         frame_player_bboxes: dict[int, dict[int, tuple]] = {}  # frame_idx -> {track_id -> bbox}
+        # Full target possession history (unlike deque, this persists across entire video)
+        # Stores (frame_idx, holder_track_id, last_holder_track_id) for every frame
+        self._target_possession_log: list[tuple[int, int, int]] = []
 
         for frame_idx, detections, frame in self.detector.process_video(video_path, vid_stride=vid_stride):
             actual_frame = frame_idx * vid_stride
@@ -245,6 +248,12 @@ class InferencePipeline:
 
             # Update possession
             possession = self.possession_tracker.update(detections, player_teams)
+
+            # Log possession for target filtering (every 10 frames to save memory)
+            if frame_idx % 10 == 0:
+                holder = possession.holder_track_id if possession else -1
+                last_holder = possession.last_holder_track_id if possession else -1
+                self._target_possession_log.append((frame_idx, holder, last_holder))
 
             # Pose estimation (every 10 frames to conserve GPU — not every frame)
             if self.pose_estimator and frame_idx % 10 == 0:
@@ -355,8 +364,8 @@ class InferencePipeline:
         if self.scoring_classifier:
             scoring_peaks = self.scoring_classifier.get_scoring_events(
                 fps=effective_fps,
-                confidence_threshold=0.5,
-                min_distance_seconds=3.0,
+                confidence_threshold=0.7,
+                min_distance_seconds=6.0,
             )
             for peak in scoring_peaks:
                 # Find the closest possession holder at the time of the basket
@@ -411,8 +420,8 @@ class InferencePipeline:
                     metadata=metadata,
                 ))
 
-        # Merge heuristic + classifier events (deduplicate within 3 seconds)
-        all_events = self._merge_events(heuristic_events, classifier_events, gap_seconds=3.0)
+        # Merge heuristic + classifier events (deduplicate within 6 seconds)
+        all_events = self._merge_events(heuristic_events, classifier_events, gap_seconds=6.0)
 
         logger.info(f"Pipeline complete: {len(heuristic_events)} heuristic events, "
                    f"{len(classifier_events)} classifier events, "
@@ -420,7 +429,19 @@ class InferencePipeline:
 
         # Filter events to target profile's track IDs
         if self.target_track_ids:
-            filtered = [e for e in all_events if e.player_track_id in self.target_track_ids]
+            filtered = []
+            for e in all_events:
+                if e.player_track_id in self.target_track_ids:
+                    filtered.append(e)
+                elif e.event_type == "made_basket":
+                    # For baskets, scorer attribution may be wrong — check if any target
+                    # track had possession within ±5 seconds of this event
+                    target_scorer = self._find_target_near_event(e.frame_idx, window=150)
+                    if target_scorer is not None:
+                        e.player_track_id = target_scorer
+                        e.metadata["scorer_reassigned"] = True
+                        filtered.append(e)
+                        logger.info(f"Reassigned made_basket at {e.timestamp:.1f}s to target track {target_scorer}")
             logger.info(f"Filtered to target: {len(filtered)} of {len(all_events)} events, "
                        f"{len(self.target_track_ids)} target tracks")
             return filtered
@@ -431,16 +452,53 @@ class InferencePipeline:
                           "Check: are profile/team photos uploaded? Are embeddings valid?")
             return []
 
+    def _find_target_near_event(self, frame_idx: int, window: int = 150) -> int | None:
+        """Check if any target track had possession within ±window frames of an event.
+
+        Returns the target track_id if found, else None.
+        Used to rescue made_basket events where the scorer was misattributed.
+        Uses the persistent possession log (not the limited deque).
+        """
+        best_track = None
+        best_dist = float("inf")
+        for hist_frame, holder, last_holder in self._target_possession_log:
+            dist = abs(hist_frame - frame_idx)
+            if dist > window:
+                continue
+            if holder in self.target_track_ids and dist < best_dist:
+                best_dist = dist
+                best_track = holder
+            if last_holder in self.target_track_ids and dist < best_dist:
+                best_dist = dist
+                best_track = last_holder
+        return best_track
+
     def _find_scorer_at_frame(self, frame_idx: int) -> int:
-        """Find the most likely scorer at a given frame from possession history."""
-        # Check possession history in the event detector
+        """Find the most likely scorer at a given frame from possession history.
+
+        Searches ±3 seconds. Prefers target tracks over non-target tracks
+        when both are plausible holders near the event.
+        """
+        candidates: list[tuple[int, int]] = []  # (track_id, frame_distance)
         for hist_frame, ps in reversed(self.event_detector.possession_history):
-            if abs(hist_frame - frame_idx) < 30:  # Within ~1 second
-                if ps.ball_status == "in_air" and ps.last_holder_track_id >= 0:
-                    return ps.last_holder_track_id
-                if ps.holder_track_id >= 0:
-                    return ps.holder_track_id
-        return -1
+            dist = abs(hist_frame - frame_idx)
+            if dist > 90:  # ~3 seconds at 30fps
+                continue
+            if ps.ball_status == "in_air" and ps.last_holder_track_id >= 0:
+                candidates.append((ps.last_holder_track_id, dist))
+            elif ps.holder_track_id >= 0:
+                candidates.append((ps.holder_track_id, dist))
+
+        if not candidates:
+            return -1
+
+        # Prefer target tracks: if any candidate is a target, pick the closest one
+        target_candidates = [(tid, d) for tid, d in candidates if tid in self.target_track_ids]
+        if target_candidates:
+            return min(target_candidates, key=lambda x: x[1])[0]
+
+        # Otherwise pick the closest candidate
+        return min(candidates, key=lambda x: x[1])[0]
 
     def _merge_events(self, heuristic: list[BasketballEvent],
                       classifier: list[BasketballEvent],
