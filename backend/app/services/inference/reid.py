@@ -157,8 +157,9 @@ class ReIDExtractor:
 class ReIDMatcher:
     """Matches detected players to known roster players using embedding similarity."""
 
-    def __init__(self, match_threshold: float = 0.75):
+    def __init__(self, match_threshold: float = 0.55):
         self.match_threshold = match_threshold
+        self._score_log_count = 0  # throttle debug logging
         self.roster_embeddings: dict[str, np.ndarray] = {}  # player_id -> embedding
         self.roster_info: dict[str, dict] = {}  # player_id -> {name, jersey_number, team_name}
 
@@ -223,6 +224,11 @@ class ReIDMatcher:
             if score > best_score:
                 best_score = score
                 best_id = player_id
+
+        # Log score distribution periodically (every 50th query) to calibrate threshold
+        self._score_log_count += 1
+        if self._score_log_count <= 20 or self._score_log_count % 50 == 0:
+            logger.info(f"ReID score: {best_score:.3f} (threshold={self.match_threshold}, query #{self._score_log_count})")
 
         if best_id is None or best_score < self.match_threshold:
             return None
