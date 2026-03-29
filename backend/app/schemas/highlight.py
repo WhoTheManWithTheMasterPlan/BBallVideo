@@ -17,6 +17,7 @@ class HighlightResponse(BaseModel):
     created_at: datetime
     review_status: str
     corrected_event_type: str | None
+    reject_reason: str | None
     reviewed_at: datetime | None
 
     model_config = {"from_attributes": True}
@@ -25,3 +26,4 @@ class HighlightResponse(BaseModel):
 class HighlightReviewUpdate(BaseModel):
     review_status: Literal["confirmed", "rejected"]
     corrected_event_type: str | None = None
+    reject_reason: str | None = None

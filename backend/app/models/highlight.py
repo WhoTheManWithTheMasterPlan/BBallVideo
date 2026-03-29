@@ -25,6 +25,7 @@ class Highlight(Base):
     # Human review fields
     review_status: Mapped[str] = mapped_column(String(20), default="pending")  # pending, confirmed, rejected
     corrected_event_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    reject_reason: Mapped[str | None] = mapped_column(String(100), nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     job: Mapped["ProcessingJob"] = relationship(back_populates="highlights")

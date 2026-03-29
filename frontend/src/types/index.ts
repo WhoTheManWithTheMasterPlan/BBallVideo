@@ -75,6 +75,7 @@ export interface Highlight {
   created_at: string;
   review_status: "pending" | "confirmed" | "rejected";
   corrected_event_type: string | null;
+  reject_reason: string | null;
   reviewed_at: string | null;
 }
 

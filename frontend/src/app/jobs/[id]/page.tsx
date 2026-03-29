@@ -8,6 +8,15 @@ import type { ProcessingJob, Highlight, Stat } from "@/types";
 import ClipPlayer from "@/components/video/ClipPlayer";
 import ShotChart from "@/components/court/ShotChart";
 
+const REJECT_REASONS = [
+  "Wrong player",
+  "Wrong event type",
+  "Nothing happened",
+  "Duplicate clip",
+  "Wrong team scoring",
+  "Poor quality",
+];
+
 export default function JobDetailPage() {
   const params = useParams();
   const jobId = params.id as string;
@@ -19,6 +28,7 @@ export default function JobDetailPage() {
   const [stats, setStats] = useState<Stat[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
+  const [rejectReason, setRejectReason] = useState<string>("");
 
   useEffect(() => {
     const loadJob = () => {
@@ -55,12 +65,18 @@ export default function JobDetailPage() {
     }
   }, [jobId, job?.status, filterType, filterReview]);
 
-  const handleReview = async (highlightId: string, status: "confirmed" | "rejected", correctedType?: string | null) => {
+  // Reset reject reason when selecting a new clip
+  useEffect(() => {
+    setRejectReason(selectedClip?.reject_reason || "");
+  }, [selectedClip?.id]);
+
+  const handleReview = async (highlightId: string, status: "confirmed" | "rejected", correctedType?: string | null, reason?: string | null) => {
     setReviewing(true);
     try {
       const updated = await api.highlights.review(highlightId, {
         review_status: status,
         corrected_event_type: correctedType,
+        reject_reason: status === "rejected" ? reason : null,
       }) as Highlight;
       setHighlights((prev) => prev.map((h) => (h.id === highlightId ? updated : h)));
       if (selectedClip?.id === highlightId) setSelectedClip(updated);
@@ -75,7 +91,6 @@ export default function JobDetailPage() {
     setReviewing(true);
     try {
       await api.highlights.reviewAll(jobId, status);
-      // Refetch to get updated statuses
       const h = await api.highlights.listByJob(jobId, filterType || undefined, filterReview || undefined);
       setHighlights(h as Highlight[]);
     } catch (e) {
@@ -194,7 +209,7 @@ export default function JobDetailPage() {
       {/* Highlights */}
       {job.status === "completed" && (
         <div>
-          {/* Review progress bar */}
+          {/* Review progress + bulk actions */}
           <div className="flex items-center gap-4 mb-4 text-xs">
             <span className="text-gray-400">
               <span className="text-gray-300 font-medium">{reviewCounts.pending}</span> pending
@@ -272,57 +287,27 @@ export default function JobDetailPage() {
             </div>
           </div>
 
-          {/* Selected clip player + review controls */}
+          {/* Selected clip: review controls ABOVE video */}
           {selectedClip && selectedClip.file_key && (
             <div className="mb-6">
-              <div className="flex items-center justify-between mb-2">
-                <div>
+              {/* Review controls bar */}
+              <div className="flex items-center gap-3 mb-3 p-3 bg-gray-900 rounded-lg border border-gray-700">
+                <div className="flex items-center gap-2 mr-2">
                   <span className="text-sm font-medium">
                     {eventTypeLabels[selectedClip.corrected_event_type || selectedClip.event_type] || selectedClip.event_type}
                   </span>
                   {selectedClip.corrected_event_type && selectedClip.corrected_event_type !== selectedClip.event_type && (
-                    <span className="text-xs text-yellow-400 ml-2">(was: {eventTypeLabels[selectedClip.event_type] || selectedClip.event_type})</span>
+                    <span className="text-xs text-yellow-400">(was: {eventTypeLabels[selectedClip.event_type]})</span>
                   )}
-                  <span className="text-sm text-gray-400 ml-3">
+                  <span className="text-xs text-gray-400">
                     {Math.floor(selectedClip.start_time / 60)}:{String(Math.floor(selectedClip.start_time % 60)).padStart(2, "0")}
-                    {selectedClip.confidence && ` — ${Math.round(selectedClip.confidence * 100)}% confidence`}
+                    {selectedClip.confidence && ` — ${Math.round(selectedClip.confidence * 100)}%`}
                   </span>
                 </div>
-                <button onClick={() => setSelectedClip(null)} className="text-sm text-gray-400 hover:text-white">
-                  Close
-                </button>
-              </div>
-              <ClipPlayer src={api.files.getUrl(selectedClip.file_key)} autoPlay />
 
-              {/* Review controls */}
-              <div className="flex items-center gap-3 mt-3 p-3 bg-gray-900 rounded-lg border border-gray-700">
-                <span className="text-xs text-gray-400 mr-2">Review:</span>
-                <button
-                  onClick={() => handleReview(selectedClip.id, "confirmed")}
-                  disabled={reviewing}
-                  className={`px-4 py-1.5 rounded text-xs font-medium transition-colors ${
-                    selectedClip.review_status === "confirmed"
-                      ? "bg-green-600 text-white"
-                      : "bg-gray-800 hover:bg-green-800 text-gray-300"
-                  }`}
-                >
-                  Confirm
-                </button>
-                <button
-                  onClick={() => handleReview(selectedClip.id, "rejected")}
-                  disabled={reviewing}
-                  className={`px-4 py-1.5 rounded text-xs font-medium transition-colors ${
-                    selectedClip.review_status === "rejected"
-                      ? "bg-red-600 text-white"
-                      : "bg-gray-800 hover:bg-red-800 text-gray-300"
-                  }`}
-                >
-                  Reject
-                </button>
+                <div className="flex-1" />
 
-                <div className="border-l border-gray-700 h-6 mx-1" />
-
-                <span className="text-xs text-gray-400">Correct type:</span>
+                {/* Correct event type */}
                 <select
                   value={selectedClip.corrected_event_type || selectedClip.event_type}
                   onChange={(e) => {
@@ -337,10 +322,62 @@ export default function JobDetailPage() {
                     </option>
                   ))}
                 </select>
+
+                <button
+                  onClick={() => handleReview(selectedClip.id, "confirmed")}
+                  disabled={reviewing}
+                  className={`px-4 py-1.5 rounded text-xs font-medium transition-colors ${
+                    selectedClip.review_status === "confirmed"
+                      ? "bg-green-600 text-white"
+                      : "bg-gray-800 hover:bg-green-800 text-gray-300"
+                  }`}
+                >
+                  Confirm
+                </button>
+
+                {/* Reject with reason */}
+                <div className="flex items-center gap-1">
+                  <select
+                    value={rejectReason}
+                    onChange={(e) => setRejectReason(e.target.value)}
+                    className="bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-gray-200"
+                  >
+                    <option value="">Reject reason...</option>
+                    {REJECT_REASONS.map((r) => (
+                      <option key={r} value={r}>{r}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => handleReview(selectedClip.id, "rejected", null, rejectReason || null)}
+                    disabled={reviewing}
+                    className={`px-4 py-1.5 rounded text-xs font-medium transition-colors ${
+                      selectedClip.review_status === "rejected"
+                        ? "bg-red-600 text-white"
+                        : "bg-gray-800 hover:bg-red-800 text-gray-300"
+                    }`}
+                  >
+                    Reject
+                  </button>
+                </div>
+
+                <button onClick={() => setSelectedClip(null)} className="text-sm text-gray-400 hover:text-white ml-2">
+                  Close
+                </button>
               </div>
+
+              {/* Reject reason display if already rejected */}
+              {selectedClip.review_status === "rejected" && selectedClip.reject_reason && (
+                <div className="text-xs text-red-400 mb-2 px-1">
+                  Rejected: {selectedClip.reject_reason}
+                </div>
+              )}
+
+              {/* Video player */}
+              <ClipPlayer src={api.files.getUrl(selectedClip.file_key)} autoPlay />
             </div>
           )}
 
+          {/* Highlight grid */}
           {highlights.length === 0 ? (
             <p className="text-gray-500">No highlights found for this filter.</p>
           ) : (
@@ -383,6 +420,9 @@ export default function JobDetailPage() {
                       {Math.floor(h.start_time / 60)}:{String(Math.floor(h.start_time % 60)).padStart(2, "0")}
                       {h.confidence && ` — ${Math.round(h.confidence * 100)}%`}
                     </div>
+                    {h.review_status === "rejected" && h.reject_reason && (
+                      <div className="text-xs text-red-400 mt-0.5 truncate">{h.reject_reason}</div>
+                    )}
                   </div>
                 </button>
               ))}

@@ -60,6 +60,7 @@ async def review_highlight(
 
     highlight.review_status = body.review_status
     highlight.corrected_event_type = body.corrected_event_type
+    highlight.reject_reason = body.reject_reason
     highlight.reviewed_at = datetime.utcnow()
     await db.commit()
     await db.refresh(highlight)

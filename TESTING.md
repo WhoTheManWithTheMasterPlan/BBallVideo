@@ -64,12 +64,12 @@ Tracks changes between test runs and their results. Video: Mikey soph (#33, VHHS
 - Window narrowed ±5s → ±3s
 - Added ball_status to possession log
 **Config**: ReID threshold 0.75, classifier threshold 0.7, min_distance 6s
-**Results**: PENDING
+**Results**: Worker killed before completion (two workers conflicted)
 **Expected**: Fewer false reassignments (maybe 2-5 instead of 19)
 
 ---
 
-## test9 (planned) — ResNet50 ReID + rescue for all event types + court debugging
+## test9 (2026-03-29) — ResNet50 ReID + rescue for all event types + court debugging
 **Changes**:
 - ReID model: ResNet18 → ResNet50 (resnet50.a2_in1k via timm, 2048-dim embeddings)
 - Jersey-only match threshold: 5 reads → 3 reads
@@ -82,6 +82,45 @@ Tracks changes between test runs and their results. Video: Mikey soph (#33, VHHS
 - Steal detection without team classification (proximity-based fallback)
 - Assist detection without team classification (proximity-based fallback)
 - Court detector debug logging (keypoint count, homography success/fail, reprojection error)
+**Config**: ReID threshold 0.75, classifier threshold 0.7, min_distance 6s
+**Results**: FAILED — worker killed at 15.6% (two workers conflicted)
+**Partial data (frame 3000/19238)**:
+- 6 heuristic events (3 made_basket, 1 steal, 1 assist, 1 rebound)
+- 0 ReID target matches at 0.75 threshold (ResNet50 scores too low)
+- 1 target track via jersey OCR (#33, 3 reads)
+- Teamless steal/assist detection working
+- Rebound detection working
+**Issues**:
+- ResNet50 cosine similarity distribution much lower than ResNet18 — 0.75 threshold blocks all matches
+- Two celery workers started simultaneously, caused conflict
+
+---
+
+## test10 (2026-03-29) — Lower ReID threshold + score logging
+**Changes**:
+- ReID match threshold: 0.75 → 0.55 (ResNet50 needs lower threshold)
+- Added periodic ReID score logging (first 20 queries + every 50th) to calibrate threshold
+**Config**: ReID threshold 0.55, classifier threshold 0.7, min_distance 6s
+**Results**: 27 highlights, 27 stats
+**Pipeline stats**: 35 heuristic events, 58 classifier events, 56 merged, 27 after target filter
+**Target tracks**: 187 (way too many — 0.55 threshold too loose, should be ~5-15)
+**Event breakdown**:
+- 14 reassigned made_baskets (rescue logic)
+- 1 rescued assist (target as scorer, 70.2s)
+- 2 rescued rebounds (74.3s, 400.7s)
+- 7 classifier-only baskets (≥0.85 conf)
+- Rest: direct target track matches
+**ReID score distribution**: matches at 0.55-0.62, non-matches 0.20-0.55 (tight gap)
+**Issues**:
+- 27 highlights for 4 real events = still too many false positives
+- 187 target tracks = ReID threshold too low (matching ~8% of all players)
+- Rescue reassigning baskets too aggressively with so many target tracks
+- Need threshold ~0.62 to reduce false target matches
+**Progress vs test7** (21 highlights):
+- First time getting assists and rebounds (not just made_baskets)
+- Teamless steal/assist detection working
+- Classifier dedup and 0.85 threshold reduced classifier noise (58 vs 116 in test6)
+- Court coords still 0
 
 ---
 

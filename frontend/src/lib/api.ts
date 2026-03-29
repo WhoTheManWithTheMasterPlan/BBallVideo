@@ -198,7 +198,7 @@ export const api = {
       const params = eventType ? `?event_type=${eventType}` : "";
       return fetchAPI(`/api/v1/highlights/profile/${profileId}${params}`);
     },
-    review: (highlightId: string, data: { review_status: "confirmed" | "rejected"; corrected_event_type?: string | null }) =>
+    review: (highlightId: string, data: { review_status: "confirmed" | "rejected"; corrected_event_type?: string | null; reject_reason?: string | null }) =>
       fetchAPI(`/api/v1/highlights/${highlightId}/review`, { method: "PATCH", body: JSON.stringify(data) }),
     reviewAll: (jobId: string, reviewStatus: "confirmed" | "rejected") =>
       fetchAPI(`/api/v1/highlights/job/${jobId}/review-all`, { method: "PATCH", body: JSON.stringify({ review_status: reviewStatus }) }),
