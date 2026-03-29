@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { trackEvent } from "@/lib/activity";
 import type { Video, ProcessingJob } from "@/types";
 
 export default function VideoDetailPage() {
@@ -14,6 +15,7 @@ export default function VideoDetailPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    trackEvent("page_view", { page: "video_detail", video_id: videoId });
     api.videos
       .get(videoId)
       .then((v) => setVideo(v as Video))

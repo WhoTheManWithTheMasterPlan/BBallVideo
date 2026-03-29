@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { trackEvent } from "@/lib/activity";
 import type { Profile, Team, TeamPhoto } from "@/types";
 
 export default function ProfileDetailPage() {
@@ -35,6 +36,7 @@ export default function ProfileDetailPage() {
   };
 
   useEffect(() => {
+    trackEvent("page_view", { page: "profile_detail", profile_id: profileId });
     loadProfile();
   }, [profileId]);
 
@@ -70,8 +72,10 @@ export default function ProfileDetailPage() {
 
       if (editingTeam) {
         await api.teams.update(profileId, editingTeam.id, data);
+        trackEvent("team_updated", { profile_id: profileId, team_id: editingTeam.id });
       } else {
         await api.teams.create(profileId, data);
+        trackEvent("team_created", { profile_id: profileId, team_name: data.name });
       }
       setShowTeamForm(false);
       loadProfile();
@@ -87,6 +91,7 @@ export default function ProfileDetailPage() {
     setError(null);
     try {
       await api.teams.delete(profileId, teamId);
+      trackEvent("team_deleted", { profile_id: profileId, team_id: teamId });
       if (expandedTeamId === teamId) setExpandedTeamId(null);
       loadProfile();
     } catch (err) {
@@ -104,6 +109,7 @@ export default function ProfileDetailPage() {
       for (const file of Array.from(files)) {
         await api.teams.uploadPhoto(profileId, teamId, file);
       }
+      trackEvent("team_photos_uploaded", { profile_id: profileId, team_id: teamId, count: files.length });
       loadProfile();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to upload photo");
@@ -117,6 +123,7 @@ export default function ProfileDetailPage() {
     setError(null);
     try {
       await api.teams.deletePhoto(profileId, teamId, photoId);
+      trackEvent("team_photo_deleted", { profile_id: profileId, team_id: teamId, photo_id: photoId });
       loadProfile();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete photo");

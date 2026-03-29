@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { trackEvent } from "@/lib/activity";
 import type { Profile, Team } from "@/types";
 
 const USER_ID = "default";
@@ -32,10 +33,12 @@ export default function UploadPage() {
   const profileTeams = selectedProfile?.teams || [];
 
   useEffect(() => {
+    trackEvent("page_view", { page: "upload" });
     api.profiles.list(USER_ID).then((p) => setProfiles(p as Profile[])).catch(() => {});
   }, []);
 
   const handleProfileNext = () => {
+    trackEvent("upload_step", { step: "profile_selected", profile_id: selectedProfileId });
     if (profileTeams.length > 0) {
       setStep("team");
     } else {
@@ -72,15 +75,18 @@ export default function UploadPage() {
       })) as { id: string };
 
       // Upload video file
+      trackEvent("upload_started", { video_id: video.id, file_size_mb: Math.round(videoFile.size / 1024 / 1024) });
       await api.videos.uploadFile(video.id, videoFile, setProgress);
 
       // Trigger processing with selected profile + team
+      trackEvent("upload_completed", { video_id: video.id });
       const job = (await api.videos.triggerProcessing(
         video.id,
         selectedProfileId,
         selectedTeamId || undefined,
       )) as { id: string };
 
+      trackEvent("processing_triggered", { video_id: video.id, job_id: job.id, profile_id: selectedProfileId, team_id: selectedTeamId || null });
       router.push(`/jobs/${job.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");

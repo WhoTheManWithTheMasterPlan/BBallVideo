@@ -1,6 +1,12 @@
+"use client";
+
 import Link from "next/link";
+import { useEffect } from "react";
+import { trackEvent } from "@/lib/activity";
 
 export default function Home() {
+  useEffect(() => { trackEvent("page_view", { page: "home" }); }, []);
+
   return (
     <main className="flex flex-col items-center justify-center min-h-screen p-8">
       <h1 className="text-5xl font-bold mb-4">BBallVideo</h1>

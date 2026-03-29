@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
+import { trackEvent } from "@/lib/activity";
 import type { Profile } from "@/types";
 
 const USER_ID = "default";
@@ -12,6 +13,8 @@ export default function NewProfilePage() {
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => { trackEvent("page_view", { page: "new_profile" }); }, []);
 
   const handleSubmit = async () => {
     if (!name.trim()) return;
@@ -24,6 +27,7 @@ export default function NewProfilePage() {
         user_id: USER_ID,
       })) as Profile;
 
+      trackEvent("profile_created", { profile_id: profile.id, name: name.trim() });
       router.push(`/profiles/${profile.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create profile");

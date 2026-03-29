@@ -210,6 +210,28 @@ backend/app/services/inference/court_detector.py → pipeline.py → court_x/cou
 backend/app/services/inference/action_classifier.py → pipeline.py → action metadata in events → Highlight/Stat
 ```
 
+### Activity Logging (REQUIRED for all frontend changes)
+
+Every frontend page or interactive component MUST include `trackEvent()` calls from `frontend/src/lib/activity.ts`. This is automatic — treat it as part of any frontend change, not a separate task.
+
+**Required tracking points:**
+- `page_view` — on mount (`useEffect`) for every page/route
+- User actions — clicks on buttons, form submissions, filter changes, navigation events
+- Key workflows — upload started/completed, processing triggered, review actions, clip creation, reel building
+
+**Pattern:**
+```typescript
+import { trackEvent } from "@/lib/activity";
+
+// On page mount
+useEffect(() => { trackEvent("page_view", { page: "page_name" }); }, []);
+
+// On user action
+onClick={() => { trackEvent("action_name", { relevant: "details" }); doAction(); }}
+```
+
+**Backend:** `POST /api/v1/activity/track` receives events. `ActivityLogMiddleware` in `backend/app/middleware/activity_logger.py` also logs all HTTP requests to `{STORAGE_BASE_PATH}/logs/activity.log` (JSON lines, 10MB × 5 rotating).
+
 ### Commit Discipline
 - Never commit secrets or .env files
 - Run quality check before any commit
