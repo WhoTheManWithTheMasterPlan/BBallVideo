@@ -187,14 +187,21 @@ export const api = {
       fetchAPI(`/api/v1/jobs/video/${videoId}`),
   },
   highlights: {
-    listByJob: (jobId: string, eventType?: string) => {
-      const params = eventType ? `?event_type=${eventType}` : "";
-      return fetchAPI(`/api/v1/highlights/job/${jobId}${params}`);
+    listByJob: (jobId: string, eventType?: string, reviewStatus?: string) => {
+      const params = new URLSearchParams();
+      if (eventType) params.set("event_type", eventType);
+      if (reviewStatus) params.set("review_status", reviewStatus);
+      const qs = params.toString();
+      return fetchAPI(`/api/v1/highlights/job/${jobId}${qs ? `?${qs}` : ""}`);
     },
     listByProfile: (profileId: string, eventType?: string) => {
       const params = eventType ? `?event_type=${eventType}` : "";
       return fetchAPI(`/api/v1/highlights/profile/${profileId}${params}`);
     },
+    review: (highlightId: string, data: { review_status: "confirmed" | "rejected"; corrected_event_type?: string | null }) =>
+      fetchAPI(`/api/v1/highlights/${highlightId}/review`, { method: "PATCH", body: JSON.stringify(data) }),
+    reviewAll: (jobId: string, reviewStatus: "confirmed" | "rejected") =>
+      fetchAPI(`/api/v1/highlights/job/${jobId}/review-all`, { method: "PATCH", body: JSON.stringify({ review_status: reviewStatus }) }),
   },
   stats: {
     listByJob: (jobId: string) =>

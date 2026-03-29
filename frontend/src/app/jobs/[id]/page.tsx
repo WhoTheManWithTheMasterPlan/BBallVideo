@@ -14,9 +14,11 @@ export default function JobDetailPage() {
   const [job, setJob] = useState<ProcessingJob | null>(null);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [filterType, setFilterType] = useState<string>("");
+  const [filterReview, setFilterReview] = useState<string>("");
   const [selectedClip, setSelectedClip] = useState<Highlight | null>(null);
   const [stats, setStats] = useState<Stat[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [reviewing, setReviewing] = useState(false);
 
   useEffect(() => {
     const loadJob = () => {
@@ -27,7 +29,6 @@ export default function JobDetailPage() {
     };
 
     loadJob();
-    // Poll while processing
     const interval = setInterval(() => {
       api.jobs.get(jobId).then((j) => {
         const updated = j as ProcessingJob;
@@ -44,7 +45,7 @@ export default function JobDetailPage() {
   useEffect(() => {
     if (job?.status === "completed") {
       api.highlights
-        .listByJob(jobId, filterType || undefined)
+        .listByJob(jobId, filterType || undefined, filterReview || undefined)
         .then((h) => setHighlights(h as Highlight[]))
         .catch(() => {});
       api.stats
@@ -52,7 +53,37 @@ export default function JobDetailPage() {
         .then((s) => setStats(s as Stat[]))
         .catch(() => {});
     }
-  }, [jobId, job?.status, filterType]);
+  }, [jobId, job?.status, filterType, filterReview]);
+
+  const handleReview = async (highlightId: string, status: "confirmed" | "rejected", correctedType?: string | null) => {
+    setReviewing(true);
+    try {
+      const updated = await api.highlights.review(highlightId, {
+        review_status: status,
+        corrected_event_type: correctedType,
+      }) as Highlight;
+      setHighlights((prev) => prev.map((h) => (h.id === highlightId ? updated : h)));
+      if (selectedClip?.id === highlightId) setSelectedClip(updated);
+    } catch (e) {
+      console.error("Review failed:", e);
+    } finally {
+      setReviewing(false);
+    }
+  };
+
+  const handleReviewAll = async (status: "confirmed" | "rejected") => {
+    setReviewing(true);
+    try {
+      await api.highlights.reviewAll(jobId, status);
+      // Refetch to get updated statuses
+      const h = await api.highlights.listByJob(jobId, filterType || undefined, filterReview || undefined);
+      setHighlights(h as Highlight[]);
+    } catch (e) {
+      console.error("Bulk review failed:", e);
+    } finally {
+      setReviewing(false);
+    }
+  };
 
   if (error) {
     return (
@@ -85,6 +116,22 @@ export default function JobDetailPage() {
     steal: "Steal",
     assist: "Assist",
     rebound: "Rebound",
+    block: "Block",
+    hustle: "Hustle",
+  };
+
+  const eventTypes = ["made_basket", "steal", "assist", "rebound", "block", "hustle"];
+
+  const reviewCounts = {
+    pending: highlights.filter((h) => h.review_status === "pending").length,
+    confirmed: highlights.filter((h) => h.review_status === "confirmed").length,
+    rejected: highlights.filter((h) => h.review_status === "rejected").length,
+  };
+
+  const reviewBorderColor = (status: string) => {
+    if (status === "confirmed") return "border-green-500";
+    if (status === "rejected") return "border-red-500";
+    return "border-gray-700";
   };
 
   return (
@@ -147,6 +194,35 @@ export default function JobDetailPage() {
       {/* Highlights */}
       {job.status === "completed" && (
         <div>
+          {/* Review progress bar */}
+          <div className="flex items-center gap-4 mb-4 text-xs">
+            <span className="text-gray-400">
+              <span className="text-gray-300 font-medium">{reviewCounts.pending}</span> pending
+            </span>
+            <span className="text-green-400">
+              <span className="font-medium">{reviewCounts.confirmed}</span> confirmed
+            </span>
+            <span className="text-red-400">
+              <span className="font-medium">{reviewCounts.rejected}</span> rejected
+            </span>
+            <div className="flex-1" />
+            <button
+              onClick={() => handleReviewAll("confirmed")}
+              disabled={reviewing || reviewCounts.pending === 0}
+              className="px-3 py-1 bg-green-800 hover:bg-green-700 disabled:opacity-50 rounded text-xs font-medium transition-colors"
+            >
+              Confirm All Pending
+            </button>
+            <button
+              onClick={() => handleReviewAll("rejected")}
+              disabled={reviewing || reviewCounts.pending === 0}
+              className="px-3 py-1 bg-red-800 hover:bg-red-700 disabled:opacity-50 rounded text-xs font-medium transition-colors"
+            >
+              Reject All Pending
+            </button>
+          </div>
+
+          {/* Filters */}
           <div className="flex items-center gap-4 mb-4">
             <h2 className="text-xl font-semibold">Highlights</h2>
             <div className="flex gap-2">
@@ -170,16 +246,43 @@ export default function JobDetailPage() {
                 </button>
               ))}
             </div>
+            <div className="border-l border-gray-700 h-4" />
+            <div className="flex gap-2">
+              <button
+                onClick={() => setFilterReview("")}
+                className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                  !filterReview ? "bg-gray-600" : "bg-gray-800 hover:bg-gray-700"
+                }`}
+              >
+                Any Status
+              </button>
+              {["pending", "confirmed", "rejected"].map((rs) => (
+                <button
+                  key={rs}
+                  onClick={() => setFilterReview(rs)}
+                  className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                    filterReview === rs
+                      ? rs === "confirmed" ? "bg-green-700" : rs === "rejected" ? "bg-red-700" : "bg-gray-600"
+                      : "bg-gray-800 hover:bg-gray-700"
+                  }`}
+                >
+                  {rs.charAt(0).toUpperCase() + rs.slice(1)}
+                </button>
+              ))}
+            </div>
           </div>
 
-          {/* Selected clip player */}
+          {/* Selected clip player + review controls */}
           {selectedClip && selectedClip.file_key && (
             <div className="mb-6">
               <div className="flex items-center justify-between mb-2">
                 <div>
                   <span className="text-sm font-medium">
-                    {eventTypeLabels[selectedClip.event_type] || selectedClip.event_type}
+                    {eventTypeLabels[selectedClip.corrected_event_type || selectedClip.event_type] || selectedClip.event_type}
                   </span>
+                  {selectedClip.corrected_event_type && selectedClip.corrected_event_type !== selectedClip.event_type && (
+                    <span className="text-xs text-yellow-400 ml-2">(was: {eventTypeLabels[selectedClip.event_type] || selectedClip.event_type})</span>
+                  )}
                   <span className="text-sm text-gray-400 ml-3">
                     {Math.floor(selectedClip.start_time / 60)}:{String(Math.floor(selectedClip.start_time % 60)).padStart(2, "0")}
                     {selectedClip.confidence && ` — ${Math.round(selectedClip.confidence * 100)}% confidence`}
@@ -190,6 +293,51 @@ export default function JobDetailPage() {
                 </button>
               </div>
               <ClipPlayer src={api.files.getUrl(selectedClip.file_key)} autoPlay />
+
+              {/* Review controls */}
+              <div className="flex items-center gap-3 mt-3 p-3 bg-gray-900 rounded-lg border border-gray-700">
+                <span className="text-xs text-gray-400 mr-2">Review:</span>
+                <button
+                  onClick={() => handleReview(selectedClip.id, "confirmed")}
+                  disabled={reviewing}
+                  className={`px-4 py-1.5 rounded text-xs font-medium transition-colors ${
+                    selectedClip.review_status === "confirmed"
+                      ? "bg-green-600 text-white"
+                      : "bg-gray-800 hover:bg-green-800 text-gray-300"
+                  }`}
+                >
+                  Confirm
+                </button>
+                <button
+                  onClick={() => handleReview(selectedClip.id, "rejected")}
+                  disabled={reviewing}
+                  className={`px-4 py-1.5 rounded text-xs font-medium transition-colors ${
+                    selectedClip.review_status === "rejected"
+                      ? "bg-red-600 text-white"
+                      : "bg-gray-800 hover:bg-red-800 text-gray-300"
+                  }`}
+                >
+                  Reject
+                </button>
+
+                <div className="border-l border-gray-700 h-6 mx-1" />
+
+                <span className="text-xs text-gray-400">Correct type:</span>
+                <select
+                  value={selectedClip.corrected_event_type || selectedClip.event_type}
+                  onChange={(e) => {
+                    const newType = e.target.value;
+                    handleReview(selectedClip.id, "confirmed", newType !== selectedClip.event_type ? newType : null);
+                  }}
+                  className="bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-gray-200"
+                >
+                  {eventTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {eventTypeLabels[type] || type}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           )}
 
@@ -201,17 +349,19 @@ export default function JobDetailPage() {
                 <button
                   key={h.id}
                   onClick={() => setSelectedClip(h)}
-                  className={`text-left rounded-lg overflow-hidden transition-all ${
+                  className={`text-left rounded-lg overflow-hidden transition-all border-2 ${
                     selectedClip?.id === h.id
-                      ? "ring-2 ring-orange-500"
-                      : "hover:ring-1 hover:ring-gray-600"
+                      ? "ring-2 ring-orange-500 " + reviewBorderColor(h.review_status)
+                      : reviewBorderColor(h.review_status) + " hover:ring-1 hover:ring-gray-600"
                   }`}
                 >
                   {h.thumbnail_file_key ? (
                     <img
                       src={api.files.getUrl(h.thumbnail_file_key)}
                       alt={h.event_type}
-                      className="w-full aspect-video object-cover bg-gray-800"
+                      className={`w-full aspect-video object-cover bg-gray-800 ${
+                        h.review_status === "rejected" ? "opacity-40" : ""
+                      }`}
                     />
                   ) : (
                     <div className="w-full aspect-video bg-gray-800 flex items-center justify-center text-gray-500 text-xs">
@@ -219,7 +369,16 @@ export default function JobDetailPage() {
                     </div>
                   )}
                   <div className="p-2 bg-gray-900">
-                    <div className="text-xs font-medium">{eventTypeLabels[h.event_type] || h.event_type}</div>
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-medium">
+                        {eventTypeLabels[h.corrected_event_type || h.event_type] || h.event_type}
+                      </div>
+                      {h.review_status !== "pending" && (
+                        <span className={`w-2 h-2 rounded-full ${
+                          h.review_status === "confirmed" ? "bg-green-500" : "bg-red-500"
+                        }`} />
+                      )}
+                    </div>
                     <div className="text-xs text-gray-400">
                       {Math.floor(h.start_time / 60)}:{String(Math.floor(h.start_time % 60)).padStart(2, "0")}
                       {h.confidence && ` — ${Math.round(h.confidence * 100)}%`}

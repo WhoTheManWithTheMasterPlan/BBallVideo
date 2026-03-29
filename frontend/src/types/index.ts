@@ -73,6 +73,9 @@ export interface Highlight {
   thumbnail_file_key: string | null;
   confidence: number | null;
   created_at: string;
+  review_status: "pending" | "confirmed" | "rejected";
+  corrected_event_type: string | null;
+  reviewed_at: string | null;
 }
 
 export interface Stat {

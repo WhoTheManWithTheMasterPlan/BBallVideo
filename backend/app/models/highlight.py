@@ -22,4 +22,9 @@ class Highlight(Base):
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+    # Human review fields
+    review_status: Mapped[str] = mapped_column(String(20), default="pending")  # pending, confirmed, rejected
+    corrected_event_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     job: Mapped["ProcessingJob"] = relationship(back_populates="highlights")

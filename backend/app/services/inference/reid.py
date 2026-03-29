@@ -157,7 +157,7 @@ class ReIDExtractor:
 class ReIDMatcher:
     """Matches detected players to known roster players using embedding similarity."""
 
-    def __init__(self, match_threshold: float = 0.55):
+    def __init__(self, match_threshold: float = 0.62):
         self.match_threshold = match_threshold
         self._score_log_count = 0  # throttle debug logging
         self.roster_embeddings: dict[str, np.ndarray] = {}  # player_id -> embedding
