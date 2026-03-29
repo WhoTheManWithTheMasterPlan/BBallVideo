@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import type { ProcessingJob, Highlight, Stat } from "@/types";
+import type { ProcessingJob, Highlight, Stat, Video } from "@/types";
 import ClipPlayer from "@/components/video/ClipPlayer";
 import ShotChart from "@/components/court/ShotChart";
 
@@ -31,9 +31,13 @@ export default function JobDetailPage() {
   const [rejectReason, setRejectReason] = useState<string>("");
   const [showAddClip, setShowAddClip] = useState(false);
   const [addClipType, setAddClipType] = useState("made_basket");
-  const [addClipMinutes, setAddClipMinutes] = useState("");
-  const [addClipSeconds, setAddClipSeconds] = useState("");
+  const [addClipStartMin, setAddClipStartMin] = useState("");
+  const [addClipStartSec, setAddClipStartSec] = useState("");
+  const [addClipEndMin, setAddClipEndMin] = useState("");
+  const [addClipEndSec, setAddClipEndSec] = useState("");
   const [addClipSubmitting, setAddClipSubmitting] = useState(false);
+  const [videoFileKey, setVideoFileKey] = useState<string | null>(null);
+  const rawVideoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     const loadJob = () => {
@@ -56,6 +60,16 @@ export default function JobDetailPage() {
 
     return () => clearInterval(interval);
   }, [jobId]);
+
+  // Fetch video file_key when job loads
+  useEffect(() => {
+    if (job?.video_id) {
+      api.videos.get(job.video_id).then((v) => {
+        const video = v as Video;
+        if (video.file_key) setVideoFileKey(video.file_key);
+      }).catch(() => {});
+    }
+  }, [job?.video_id]);
 
   useEffect(() => {
     if (job?.status === "completed") {
@@ -113,25 +127,43 @@ export default function JobDetailPage() {
   };
 
   const handleAddClip = async () => {
-    const mins = parseInt(addClipMinutes) || 0;
-    const secs = parseInt(addClipSeconds) || 0;
-    const timestamp = mins * 60 + secs;
-    if (timestamp <= 0) return;
+    const startTime = (parseInt(addClipStartMin) || 0) * 60 + (parseInt(addClipStartSec) || 0);
+    const endTime = (parseInt(addClipEndMin) || 0) * 60 + (parseInt(addClipEndSec) || 0);
+    if (endTime <= startTime) return;
 
     setAddClipSubmitting(true);
     try {
       await api.highlights.createManual(jobId, {
         event_type: addClipType,
-        timestamp,
+        start_time: startTime,
+        end_time: endTime,
       });
       await refreshHighlights();
       setShowAddClip(false);
-      setAddClipMinutes("");
-      setAddClipSeconds("");
+      setAddClipStartMin("");
+      setAddClipStartSec("");
+      setAddClipEndMin("");
+      setAddClipEndSec("");
     } catch (e) {
       console.error("Failed to create manual clip:", e);
     } finally {
       setAddClipSubmitting(false);
+    }
+  };
+
+  const setStartFromVideo = () => {
+    if (rawVideoRef.current) {
+      const t = rawVideoRef.current.currentTime;
+      setAddClipStartMin(String(Math.floor(t / 60)));
+      setAddClipStartSec(String(Math.floor(t % 60)));
+    }
+  };
+
+  const setEndFromVideo = () => {
+    if (rawVideoRef.current) {
+      const t = rawVideoRef.current.currentTime;
+      setAddClipEndMin(String(Math.floor(t / 60)));
+      setAddClipEndSec(String(Math.floor(t % 60)));
     }
   };
 
@@ -372,53 +404,118 @@ export default function JobDetailPage() {
             </div>
           </div>
 
-          {/* Add Clip form */}
+          {/* Add Clip: raw video player + start/end time form */}
           {showAddClip && (
-            <div className="flex items-center gap-3 mb-4 p-3 bg-gray-900 rounded-lg border border-orange-700">
-              <select
-                value={addClipType}
-                onChange={(e) => setAddClipType(e.target.value)}
-                className="bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200"
-              >
-                {eventTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {eventTypeLabels[type] || type}
-                  </option>
-                ))}
-              </select>
-              <div className="flex items-center gap-1">
-                <input
-                  type="number"
-                  min="0"
-                  placeholder="Min"
-                  value={addClipMinutes}
-                  onChange={(e) => setAddClipMinutes(e.target.value)}
-                  className="w-16 bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200 text-center"
-                />
-                <span className="text-gray-400">:</span>
-                <input
-                  type="number"
-                  min="0"
-                  max="59"
-                  placeholder="Sec"
-                  value={addClipSeconds}
-                  onChange={(e) => setAddClipSeconds(e.target.value)}
-                  className="w-16 bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200 text-center"
-                />
+            <div className="mb-6 p-4 bg-gray-900 rounded-lg border border-orange-700">
+              {/* Raw video player */}
+              {videoFileKey ? (
+                <div className="mb-4">
+                  <div className="text-xs text-gray-400 mb-2">
+                    Scrub through the video to find the missed event. Use the buttons to set start/end times from the current position.
+                  </div>
+                  <div className="relative rounded-lg overflow-hidden bg-black">
+                    <video
+                      ref={rawVideoRef}
+                      src={api.files.getUrl(videoFileKey)}
+                      controls
+                      className="w-full aspect-video"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="mb-4 p-4 bg-gray-800 rounded text-gray-500 text-sm text-center">
+                  Raw video not available
+                </div>
+              )}
+
+              {/* Controls row */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <select
+                  value={addClipType}
+                  onChange={(e) => setAddClipType(e.target.value)}
+                  className="bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200"
+                >
+                  {eventTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {eventTypeLabels[type] || type}
+                    </option>
+                  ))}
+                </select>
+
+                {/* Start time */}
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-gray-400">Start:</span>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="Min"
+                    value={addClipStartMin}
+                    onChange={(e) => setAddClipStartMin(e.target.value)}
+                    className="w-14 bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200 text-center"
+                  />
+                  <span className="text-gray-400">:</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="59"
+                    placeholder="Sec"
+                    value={addClipStartSec}
+                    onChange={(e) => setAddClipStartSec(e.target.value)}
+                    className="w-14 bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200 text-center"
+                  />
+                  <button
+                    onClick={setStartFromVideo}
+                    className="px-2 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs text-gray-300 transition-colors"
+                    title="Set start from current video position"
+                  >
+                    Set
+                  </button>
+                </div>
+
+                {/* End time */}
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-gray-400">End:</span>
+                  <input
+                    type="number"
+                    min="0"
+                    placeholder="Min"
+                    value={addClipEndMin}
+                    onChange={(e) => setAddClipEndMin(e.target.value)}
+                    className="w-14 bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200 text-center"
+                  />
+                  <span className="text-gray-400">:</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="59"
+                    placeholder="Sec"
+                    value={addClipEndSec}
+                    onChange={(e) => setAddClipEndSec(e.target.value)}
+                    className="w-14 bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200 text-center"
+                  />
+                  <button
+                    onClick={setEndFromVideo}
+                    className="px-2 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs text-gray-300 transition-colors"
+                    title="Set end from current video position"
+                  >
+                    Set
+                  </button>
+                </div>
+
+                <button
+                  onClick={handleAddClip}
+                  disabled={addClipSubmitting || (!addClipEndMin && !addClipEndSec)}
+                  className="px-4 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-sm font-medium transition-colors"
+                >
+                  {addClipSubmitting ? "Creating..." : "Create Clip"}
+                </button>
+                <button
+                  onClick={() => setShowAddClip(false)}
+                  className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
+                >
+                  Cancel
+                </button>
               </div>
-              <button
-                onClick={handleAddClip}
-                disabled={addClipSubmitting || (!addClipMinutes && !addClipSeconds)}
-                className="px-4 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-sm font-medium transition-colors"
-              >
-                {addClipSubmitting ? "Creating..." : "Create"}
-              </button>
-              <button
-                onClick={() => setShowAddClip(false)}
-                className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
-              >
-                Cancel
-              </button>
             </div>
           )}
 

@@ -25,8 +25,8 @@ class HighlightResponse(BaseModel):
 
 class ManualHighlightCreate(BaseModel):
     event_type: str
-    timestamp: float  # seconds into the video where the event occurred
-    padding: float = 5.0  # seconds before/after to include in clip
+    start_time: float  # clip start in seconds
+    end_time: float  # clip end in seconds
 
 
 class HighlightReviewUpdate(BaseModel):

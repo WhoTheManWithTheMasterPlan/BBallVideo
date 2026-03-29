@@ -1,6 +1,9 @@
 import asyncio
+import logging
+import shutil
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, update
@@ -8,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
+from app.core.config import settings
 from app.models.highlight import Highlight
 from app.models.job import ProcessingJob
 from app.models.stat import Stat
@@ -18,6 +22,8 @@ from app.schemas.highlight import (
 )
 from app.services.video.clipper import extract_clip, extract_thumbnail
 from app.services.video.storage import get_file_path
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -106,15 +112,16 @@ async def create_manual_highlight(
     clip_path = str(get_file_path(clip_file_key))
     thumb_path = str(get_file_path(thumb_file_key))
 
-    start_time = max(0, body.timestamp - body.padding)
-    end_time = body.timestamp + body.padding
+    start_time = max(0, body.start_time)
+    end_time = body.end_time
+    midpoint = (start_time + end_time) / 2
 
     # Extract clip and thumbnail in a thread (ffmpeg is blocking)
     await asyncio.to_thread(
-        extract_clip, video_path, clip_path, body.timestamp, body.timestamp, body.padding
+        extract_clip, video_path, clip_path, start_time, end_time, 0.0
     )
     await asyncio.to_thread(
-        extract_thumbnail, video_path, thumb_path, body.timestamp
+        extract_thumbnail, video_path, thumb_path, midpoint
     )
 
     # Create Highlight record
@@ -136,13 +143,24 @@ async def create_manual_highlight(
     stat = Stat(
         job_id=job_id,
         event_type=body.event_type,
-        timestamp=body.timestamp,
+        timestamp=midpoint,
         metadata_={"source": "manual"},
     )
     db.add(stat)
 
     await db.commit()
     await db.refresh(highlight)
+
+    # Export clip to training data folder for ML retraining
+    try:
+        training_dir = Path(settings.storage_base_path) / "training" / "event-classifier" / body.event_type
+        training_dir.mkdir(parents=True, exist_ok=True)
+        dest = training_dir / f"{highlight_id}.mp4"
+        await asyncio.to_thread(shutil.copy2, clip_path, str(dest))
+        logger.info(f"Exported manual clip to training: {dest}")
+    except Exception as e:
+        logger.warning(f"Failed to export clip to training data: {e}")
+
     return highlight
 
 
