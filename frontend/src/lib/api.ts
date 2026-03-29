@@ -204,6 +204,8 @@ export const api = {
       fetchAPI(`/api/v1/highlights/job/${jobId}/review-all`, { method: "PATCH", body: JSON.stringify({ review_status: reviewStatus }) }),
     createManual: (jobId: string, data: { event_type: string; start_time: number; end_time: number }) =>
       fetchAPI(`/api/v1/highlights/job/${jobId}/manual`, { method: "POST", body: JSON.stringify(data) }),
+    createReel: (jobId: string, highlightIds: string[]) =>
+      fetchAPI(`/api/v1/highlights/job/${jobId}/reel`, { method: "POST", body: JSON.stringify({ highlight_ids: highlightIds }) }),
   },
   stats: {
     listByJob: (jobId: string) =>

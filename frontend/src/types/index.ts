@@ -92,3 +92,9 @@ export interface Stat {
 export interface StatsSummary {
   [event_type: string]: number;
 }
+
+export interface ReelResponse {
+  file_key: string;
+  duration_seconds: number;
+  clip_count: number;
+}

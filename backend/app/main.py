@@ -4,7 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.api.routes import profiles, teams, videos, jobs, highlights, stats, files
+from app.api.routes.activity import router as activity_router
 from app.core.config import settings
+from app.middleware.activity_logger import ActivityLogMiddleware
 from app.core.database import engine, Base
 import app.models  # noqa: F401 — register all models with Base.metadata
 
@@ -32,6 +34,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.add_middleware(ActivityLogMiddleware)
+
 app.include_router(profiles.router, prefix="/api/v1/profiles", tags=["profiles"])
 app.include_router(teams.router, prefix="/api/v1/profiles", tags=["teams"])
 app.include_router(videos.router, prefix="/api/v1/videos", tags=["videos"])
@@ -39,6 +43,7 @@ app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
 app.include_router(highlights.router, prefix="/api/v1/highlights", tags=["highlights"])
 app.include_router(stats.router, prefix="/api/v1/stats", tags=["stats"])
 app.include_router(files.router, prefix="/api/v1/files", tags=["files"])
+app.include_router(activity_router, prefix="/api/v1/activity", tags=["activity"])
 
 
 @app.get("/health")

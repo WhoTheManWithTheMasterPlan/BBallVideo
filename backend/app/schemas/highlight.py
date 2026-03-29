@@ -33,3 +33,13 @@ class HighlightReviewUpdate(BaseModel):
     review_status: Literal["confirmed", "rejected"]
     corrected_event_type: str | None = None
     reject_reason: str | None = None
+
+
+class ReelCreate(BaseModel):
+    highlight_ids: list[uuid.UUID]  # ordered list of highlight IDs to stitch
+
+
+class ReelResponse(BaseModel):
+    file_key: str  # path to download the reel
+    duration_seconds: float
+    clip_count: int

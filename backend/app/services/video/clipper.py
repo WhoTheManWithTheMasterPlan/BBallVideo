@@ -2,8 +2,10 @@
 FFmpeg-based video clip extraction + annotated debug overlay clips.
 """
 
+import json
 import logging
 import subprocess
+import tempfile
 from pathlib import Path
 
 import cv2
@@ -175,6 +177,83 @@ def _draw_annotations(frame: np.ndarray, ann: dict) -> None:
     if ann.get("possession"):
         status = ann["possession"].get("ball_status", "?")
         cv2.putText(frame, f"Ball: {status}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+
+def stitch_clips(clip_paths: list[str], output_path: str) -> float:
+    """
+    Stitch multiple clips into a single MP4 using ffmpeg concat demuxer.
+
+    Tries stream-copy first (fast, no re-encode). If that fails due to
+    incompatible codecs/resolutions, falls back to re-encoding with libx264.
+
+    Args:
+        clip_paths: Ordered list of absolute paths to clip MP4 files.
+        output_path: Absolute path for the stitched output file.
+
+    Returns:
+        Duration of the output file in seconds.
+    """
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+    # Write concat list to a temp file
+    concat_file = None
+    try:
+        concat_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, prefix="reel_concat_"
+        )
+        for p in clip_paths:
+            # Escape single quotes in paths for ffmpeg concat format
+            safe = p.replace("'", "'\\''")
+            concat_file.write(f"file '{safe}'\n")
+        concat_file.close()
+
+        # Attempt 1: stream-copy (fast, no re-encode)
+        cmd_copy = [
+            "ffmpeg", "-y",
+            "-f", "concat", "-safe", "0",
+            "-i", concat_file.name,
+            "-c", "copy",
+            "-movflags", "+faststart",
+            output_path,
+        ]
+        try:
+            subprocess.run(cmd_copy, check=True, capture_output=True)
+        except subprocess.CalledProcessError:
+            logger.warning("Stream-copy concat failed, falling back to re-encode")
+            # Attempt 2: re-encode (handles mixed codecs/resolutions)
+            cmd_encode = [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", concat_file.name,
+                "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+                "-c:a", "aac",
+                "-movflags", "+faststart",
+                output_path,
+            ]
+            subprocess.run(cmd_encode, check=True, capture_output=True)
+
+        # Probe duration with ffprobe
+        duration = _probe_duration(output_path)
+        return duration
+    finally:
+        if concat_file:
+            Path(concat_file.name).unlink(missing_ok=True)
+
+
+def _probe_duration(file_path: str) -> float:
+    """Get duration of a media file in seconds using ffprobe."""
+    cmd = [
+        "ffprobe",
+        "-v", "quiet",
+        "-print_format", "json",
+        "-show_format",
+        file_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        info = json.loads(result.stdout)
+        return float(info.get("format", {}).get("duration", 0.0))
+    return 0.0
 
 
 def extract_thumbnail(

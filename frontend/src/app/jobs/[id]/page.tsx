@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import type { ProcessingJob, Highlight, Stat, Video } from "@/types";
+import { trackEvent } from "@/lib/activity";
+import type { ProcessingJob, Highlight, Stat, Video, ReelResponse } from "@/types";
 import ClipPlayer from "@/components/video/ClipPlayer";
 import ShotChart from "@/components/court/ShotChart";
 
@@ -38,8 +39,13 @@ export default function JobDetailPage() {
   const [addClipSubmitting, setAddClipSubmitting] = useState(false);
   const [videoFileKey, setVideoFileKey] = useState<string | null>(null);
   const rawVideoRef = useRef<HTMLVideoElement>(null);
+  const [reelMode, setReelMode] = useState(false);
+  const [reelSelection, setReelSelection] = useState<string[]>([]);
+  const [reelBuilding, setReelBuilding] = useState(false);
+  const [reelResult, setReelResult] = useState<ReelResponse | null>(null);
 
   useEffect(() => {
+    trackEvent("page_view", { jobId });
     const loadJob = () => {
       api.jobs
         .get(jobId)
@@ -90,6 +96,7 @@ export default function JobDetailPage() {
   }, [selectedClip?.id]);
 
   const handleReview = async (highlightId: string, status: "confirmed" | "rejected", correctedType?: string | null, reason?: string | null) => {
+    trackEvent("review", { highlightId, status, correctedType });
     setReviewing(true);
     try {
       const updated = await api.highlights.review(highlightId, {
@@ -107,6 +114,7 @@ export default function JobDetailPage() {
   };
 
   const handleReviewAll = async (status: "confirmed" | "rejected") => {
+    trackEvent("bulk_review", { jobId, status });
     setReviewing(true);
     try {
       await api.highlights.reviewAll(jobId, status);
@@ -138,6 +146,7 @@ export default function JobDetailPage() {
         start_time: startTime,
         end_time: endTime,
       });
+      trackEvent("manual_clip_created", { jobId, eventType: addClipType });
       await refreshHighlights();
       setShowAddClip(false);
       setAddClipStartMin("");
@@ -164,6 +173,43 @@ export default function JobDetailPage() {
       const t = rawVideoRef.current.currentTime;
       setAddClipEndMin(String(Math.floor(t / 60)));
       setAddClipEndSec(String(Math.floor(t % 60)));
+    }
+  };
+
+  const toggleReelMode = () => {
+    if (reelMode) {
+      // Exiting reel mode — clear selection
+      setReelMode(false);
+      setReelSelection([]);
+      setReelResult(null);
+    } else {
+      setReelMode(true);
+      setReelSelection([]);
+      setReelResult(null);
+      setSelectedClip(null);
+    }
+  };
+
+  const toggleReelSelection = (highlightId: string) => {
+    setReelSelection((prev) => {
+      if (prev.includes(highlightId)) {
+        return prev.filter((id) => id !== highlightId);
+      }
+      return [...prev, highlightId];
+    });
+  };
+
+  const handleBuildReel = async () => {
+    if (reelSelection.length === 0) return;
+    setReelBuilding(true);
+    setReelResult(null);
+    try {
+      const result = await api.highlights.createReel(jobId, reelSelection) as ReelResponse;
+      setReelResult(result);
+    } catch (e) {
+      console.error("Reel build failed:", e);
+    } finally {
+      setReelBuilding(false);
     }
   };
 
@@ -352,14 +398,22 @@ export default function JobDetailPage() {
           <div className="flex items-center gap-4 mb-4">
             <h2 className="text-xl font-semibold">Highlights</h2>
             <button
-              onClick={() => setShowAddClip(!showAddClip)}
+              onClick={() => { if (!showAddClip) trackEvent("add_clip_opened", { jobId }); setShowAddClip(!showAddClip); }}
               className="px-3 py-1 rounded text-xs font-medium transition-colors bg-orange-700 hover:bg-orange-600"
             >
               {showAddClip ? "Cancel" : "+ Add Clip"}
             </button>
+            <button
+              onClick={toggleReelMode}
+              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                reelMode ? "bg-purple-600 hover:bg-purple-500" : "bg-purple-800 hover:bg-purple-700"
+              }`}
+            >
+              {reelMode ? "Exit Reel Mode" : "Build Reel"}
+            </button>
             <div className="flex gap-2">
               <button
-                onClick={() => setFilterType("")}
+                onClick={() => { trackEvent("filter_changed", { filterType: "", filterReview }); setFilterType(""); }}
                 className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
                   !filterType ? "bg-orange-600" : "bg-gray-800 hover:bg-gray-700"
                 }`}
@@ -369,7 +423,7 @@ export default function JobDetailPage() {
               {["made_basket", "missed_basket", "steal", "assist", "rebound"].map((type) => (
                 <button
                   key={type}
-                  onClick={() => setFilterType(type)}
+                  onClick={() => { trackEvent("filter_changed", { filterType: type, filterReview }); setFilterType(type); }}
                   className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
                     filterType === type ? "bg-orange-600" : "bg-gray-800 hover:bg-gray-700"
                   }`}
@@ -381,7 +435,7 @@ export default function JobDetailPage() {
             <div className="border-l border-gray-700 h-4" />
             <div className="flex gap-2">
               <button
-                onClick={() => setFilterReview("")}
+                onClick={() => { trackEvent("filter_changed", { filterType, filterReview: "" }); setFilterReview(""); }}
                 className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
                   !filterReview ? "bg-gray-600" : "bg-gray-800 hover:bg-gray-700"
                 }`}
@@ -391,7 +445,7 @@ export default function JobDetailPage() {
               {["pending", "confirmed", "rejected"].map((rs) => (
                 <button
                   key={rs}
-                  onClick={() => setFilterReview(rs)}
+                  onClick={() => { trackEvent("filter_changed", { filterType, filterReview: rs }); setFilterReview(rs); }}
                   className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
                     filterReview === rs
                       ? rs === "confirmed" ? "bg-green-700" : rs === "rejected" ? "bg-red-700" : "bg-gray-600"
@@ -609,55 +663,114 @@ export default function JobDetailPage() {
             </div>
           )}
 
+          {/* Reel action bar */}
+          {reelMode && (
+            <div className="mb-4 p-3 bg-purple-900/40 border border-purple-700 rounded-lg flex items-center gap-4">
+              <span className="text-sm text-purple-200">
+                <span className="font-bold">{reelSelection.length}</span>{" "}
+                clip{reelSelection.length !== 1 ? "s" : ""} selected
+                {reelSelection.length > 0 && " — click clips to add/remove"}
+              </span>
+              <div className="flex-1" />
+              {reelResult && (
+                <a
+                  href={api.files.getUrl(reelResult.file_key)}
+                  download
+                  className="px-4 py-1.5 bg-green-700 hover:bg-green-600 rounded text-sm font-medium transition-colors"
+                >
+                  Download Reel ({reelResult.clip_count} clips, {reelResult.duration_seconds.toFixed(1)}s)
+                </a>
+              )}
+              <button
+                onClick={handleBuildReel}
+                disabled={reelBuilding || reelSelection.length === 0}
+                className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded text-sm font-medium transition-colors"
+              >
+                {reelBuilding ? "Building..." : "Stitch Reel"}
+              </button>
+              <button
+                onClick={toggleReelMode}
+                className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+
           {/* Highlight grid */}
           {highlights.length === 0 ? (
             <p className="text-gray-500">No highlights found for this filter.</p>
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-              {highlights.map((h) => (
-                <button
-                  key={h.id}
-                  onClick={() => setSelectedClip(h)}
-                  className={`text-left rounded-lg overflow-hidden transition-all border-2 ${
-                    selectedClip?.id === h.id
-                      ? "ring-2 ring-orange-500 " + reviewBorderColor(h.review_status)
-                      : reviewBorderColor(h.review_status) + " hover:ring-1 hover:ring-gray-600"
-                  }`}
-                >
-                  {h.thumbnail_file_key ? (
-                    <img
-                      src={api.files.getUrl(h.thumbnail_file_key)}
-                      alt={h.event_type}
-                      className={`w-full aspect-video object-cover bg-gray-800 ${
-                        h.review_status === "rejected" ? "opacity-40" : ""
-                      }`}
-                    />
-                  ) : (
-                    <div className="w-full aspect-video bg-gray-800 flex items-center justify-center text-gray-500 text-xs">
-                      No thumbnail
-                    </div>
-                  )}
-                  <div className="p-2 bg-gray-900">
-                    <div className="flex items-center justify-between">
-                      <div className="text-xs font-medium">
-                        {eventTypeLabels[h.corrected_event_type || h.event_type] || h.event_type}
+              {highlights.map((h) => {
+                const reelIndex = reelMode ? reelSelection.indexOf(h.id) : -1;
+                const isInReel = reelIndex >= 0;
+                return (
+                  <button
+                    key={h.id}
+                    onClick={() => {
+                      if (reelMode) {
+                        toggleReelSelection(h.id);
+                      } else {
+                        trackEvent("clip_selected", { highlightId: h.id, eventType: h.event_type });
+                        setSelectedClip(h);
+                      }
+                    }}
+                    className={`relative text-left rounded-lg overflow-hidden transition-all border-2 ${
+                      reelMode
+                        ? isInReel
+                          ? "ring-2 ring-purple-500 border-purple-500"
+                          : "border-gray-700 hover:ring-1 hover:ring-purple-400"
+                        : selectedClip?.id === h.id
+                          ? "ring-2 ring-orange-500 " + reviewBorderColor(h.review_status)
+                          : reviewBorderColor(h.review_status) + " hover:ring-1 hover:ring-gray-600"
+                    }`}
+                  >
+                    {/* Reel selection number overlay */}
+                    {reelMode && (
+                      <div className={`absolute top-2 left-2 z-10 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
+                        isInReel
+                          ? "bg-purple-600 text-white"
+                          : "bg-gray-800/80 text-gray-400 border border-gray-600"
+                      }`}>
+                        {isInReel ? reelIndex + 1 : ""}
                       </div>
-                      {h.review_status !== "pending" && (
-                        <span className={`w-2 h-2 rounded-full ${
-                          h.review_status === "confirmed" ? "bg-green-500" : "bg-red-500"
-                        }`} />
+                    )}
+                    {h.thumbnail_file_key ? (
+                      <img
+                        src={api.files.getUrl(h.thumbnail_file_key)}
+                        alt={h.event_type}
+                        className={`w-full aspect-video object-cover bg-gray-800 ${
+                          h.review_status === "rejected" ? "opacity-40" : ""
+                        }`}
+                      />
+                    ) : (
+                      <div className="w-full aspect-video bg-gray-800 flex items-center justify-center text-gray-500 text-xs">
+                        No thumbnail
+                      </div>
+                    )}
+                    <div className="p-2 bg-gray-900">
+                      <div className="flex items-center justify-between">
+                        <div className="text-xs font-medium">
+                          {eventTypeLabels[h.corrected_event_type || h.event_type] || h.event_type}
+                        </div>
+                        {h.review_status !== "pending" && (
+                          <span className={`w-2 h-2 rounded-full ${
+                            h.review_status === "confirmed" ? "bg-green-500" : "bg-red-500"
+                          }`} />
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-400">
+                        {Math.floor(h.start_time / 60)}:{String(Math.floor(h.start_time % 60)).padStart(2, "0")}
+                        {h.confidence && ` — ${Math.round(h.confidence * 100)}%`}
+                      </div>
+                      {h.review_status === "rejected" && h.reject_reason && (
+                        <div className="text-xs text-red-400 mt-0.5 truncate">{h.reject_reason}</div>
                       )}
                     </div>
-                    <div className="text-xs text-gray-400">
-                      {Math.floor(h.start_time / 60)}:{String(Math.floor(h.start_time % 60)).padStart(2, "0")}
-                      {h.confidence && ` — ${Math.round(h.confidence * 100)}%`}
-                    </div>
-                    {h.review_status === "rejected" && h.reject_reason && (
-                      <div className="text-xs text-red-400 mt-0.5 truncate">{h.reject_reason}</div>
-                    )}
-                  </div>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
             </div>
           )}
 

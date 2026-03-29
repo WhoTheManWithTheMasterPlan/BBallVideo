@@ -19,8 +19,10 @@ from app.schemas.highlight import (
     HighlightResponse,
     HighlightReviewUpdate,
     ManualHighlightCreate,
+    ReelCreate,
+    ReelResponse,
 )
-from app.services.video.clipper import extract_clip, extract_thumbnail
+from app.services.video.clipper import extract_clip, extract_thumbnail, stitch_clips
 from app.services.video.storage import get_file_path
 
 logger = logging.getLogger(__name__)
@@ -180,3 +182,66 @@ async def review_all_highlights(
     )
     await db.commit()
     return {"updated": result.rowcount}
+
+
+@router.post("/job/{job_id}/reel", response_model=ReelResponse)
+async def create_reel(
+    job_id: uuid.UUID,
+    body: ReelCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Stitch selected highlight clips into a single downloadable reel MP4."""
+    if len(body.highlight_ids) < 1:
+        raise HTTPException(status_code=400, detail="At least one highlight is required")
+
+    # Load all requested highlights and verify they belong to this job
+    result = await db.execute(
+        select(Highlight).where(
+            Highlight.id.in_([str(hid) for hid in body.highlight_ids]),
+            Highlight.job_id == job_id,
+        )
+    )
+    highlights_map = {str(h.id): h for h in result.scalars().all()}
+
+    # Check all IDs were found and belong to this job
+    missing = [str(hid) for hid in body.highlight_ids if str(hid) not in highlights_map]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Highlights not found or not in this job: {missing}",
+        )
+
+    # Build ordered list of clip file paths
+    clip_paths: list[str] = []
+    for hid in body.highlight_ids:
+        h = highlights_map[str(hid)]
+        if not h.file_key:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Highlight {hid} has no clip file",
+            )
+        path = get_file_path(h.file_key)
+        if not path.exists():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Clip file missing for highlight {hid}",
+            )
+        clip_paths.append(str(path))
+
+    # Generate output path
+    reel_id = uuid.uuid4()
+    reel_file_key = f"reels/{job_id}/{reel_id}.mp4"
+    reel_path = str(get_file_path(reel_file_key))
+
+    # Stitch clips in a thread (ffmpeg is blocking)
+    try:
+        duration = await asyncio.to_thread(stitch_clips, clip_paths, reel_path)
+    except Exception as e:
+        logger.error(f"Reel stitching failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create reel")
+
+    return ReelResponse(
+        file_key=reel_file_key,
+        duration_seconds=duration,
+        clip_count=len(clip_paths),
+    )

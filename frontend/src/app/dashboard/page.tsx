@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
+import { trackEvent } from "@/lib/activity";
 import type { Profile, Video, ProcessingJob, StatsSummary } from "@/types";
 
 const USER_ID = "default";
@@ -15,6 +16,7 @@ export default function DashboardPage() {
   const [statsSummary, setStatsSummary] = useState<StatsSummary>({});
 
   useEffect(() => {
+    trackEvent("page_view", { page: "dashboard" });
     api.profiles.list(USER_ID).then((p) => setProfiles(p as Profile[])).catch(() => {});
     api.videos.list(USER_ID).then((v) => setVideos(v as Video[])).catch(() => {});
   }, []);
