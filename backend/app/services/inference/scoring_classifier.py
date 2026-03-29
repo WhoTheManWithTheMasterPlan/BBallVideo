@@ -59,6 +59,8 @@ class ScoringClassifier:
         state_dict = torch.load(weights_path, map_location=self.device, weights_only=True)
         self.model.load_state_dict(state_dict)
         self.model.to(self.device)
+        if self.device == "cuda":
+            self.model = self.model.half()
         self.model.eval()
         logger.info(f"Scoring classifier loaded from {weights_path} on {self.device}")
 
@@ -93,6 +95,8 @@ class ScoringClassifier:
         # Run classifier
         try:
             tensor = self.transform(crop).unsqueeze(0).to(self.device)
+            if self.device == "cuda":
+                tensor = tensor.half()
             with torch.no_grad():
                 confidence = self.model(tensor).item()
         except RuntimeError:

@@ -54,6 +54,8 @@ class ReIDExtractor:
         self.model.eval()
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = self.model.to(self.device)
+        if self.device == "cuda":
+            self.model = self.model.half()
 
     def _preprocess(self, image: np.ndarray) -> torch.Tensor:
         """Convert BGR numpy array to preprocessed tensor."""
@@ -64,6 +66,8 @@ class ReIDExtractor:
     def extract_embedding(self, crop: np.ndarray) -> np.ndarray:
         """Extract a normalized embedding vector from a player crop (BGR numpy)."""
         tensor = self._preprocess(crop)
+        if self.device == "cuda":
+            tensor = tensor.half()
         with torch.no_grad():
             embedding = self.model(tensor)
             embedding = F.normalize(embedding, dim=1)

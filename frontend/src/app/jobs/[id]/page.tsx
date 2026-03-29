@@ -29,6 +29,11 @@ export default function JobDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [rejectReason, setRejectReason] = useState<string>("");
+  const [showAddClip, setShowAddClip] = useState(false);
+  const [addClipType, setAddClipType] = useState("made_basket");
+  const [addClipMinutes, setAddClipMinutes] = useState("");
+  const [addClipSeconds, setAddClipSeconds] = useState("");
+  const [addClipSubmitting, setAddClipSubmitting] = useState(false);
 
   useEffect(() => {
     const loadJob = () => {
@@ -97,6 +102,36 @@ export default function JobDetailPage() {
       console.error("Bulk review failed:", e);
     } finally {
       setReviewing(false);
+    }
+  };
+
+  const refreshHighlights = async () => {
+    const h = await api.highlights.listByJob(jobId, filterType || undefined, filterReview || undefined);
+    setHighlights(h as Highlight[]);
+    const s = await api.stats.listByJob(jobId);
+    setStats(s as Stat[]);
+  };
+
+  const handleAddClip = async () => {
+    const mins = parseInt(addClipMinutes) || 0;
+    const secs = parseInt(addClipSeconds) || 0;
+    const timestamp = mins * 60 + secs;
+    if (timestamp <= 0) return;
+
+    setAddClipSubmitting(true);
+    try {
+      await api.highlights.createManual(jobId, {
+        event_type: addClipType,
+        timestamp,
+      });
+      await refreshHighlights();
+      setShowAddClip(false);
+      setAddClipMinutes("");
+      setAddClipSeconds("");
+    } catch (e) {
+      console.error("Failed to create manual clip:", e);
+    } finally {
+      setAddClipSubmitting(false);
     }
   };
 
@@ -284,6 +319,12 @@ export default function JobDetailPage() {
           {/* Filters */}
           <div className="flex items-center gap-4 mb-4">
             <h2 className="text-xl font-semibold">Highlights</h2>
+            <button
+              onClick={() => setShowAddClip(!showAddClip)}
+              className="px-3 py-1 rounded text-xs font-medium transition-colors bg-orange-700 hover:bg-orange-600"
+            >
+              {showAddClip ? "Cancel" : "+ Add Clip"}
+            </button>
             <div className="flex gap-2">
               <button
                 onClick={() => setFilterType("")}
@@ -330,6 +371,56 @@ export default function JobDetailPage() {
               ))}
             </div>
           </div>
+
+          {/* Add Clip form */}
+          {showAddClip && (
+            <div className="flex items-center gap-3 mb-4 p-3 bg-gray-900 rounded-lg border border-orange-700">
+              <select
+                value={addClipType}
+                onChange={(e) => setAddClipType(e.target.value)}
+                className="bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200"
+              >
+                {eventTypes.map((type) => (
+                  <option key={type} value={type}>
+                    {eventTypeLabels[type] || type}
+                  </option>
+                ))}
+              </select>
+              <div className="flex items-center gap-1">
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="Min"
+                  value={addClipMinutes}
+                  onChange={(e) => setAddClipMinutes(e.target.value)}
+                  className="w-16 bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200 text-center"
+                />
+                <span className="text-gray-400">:</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="59"
+                  placeholder="Sec"
+                  value={addClipSeconds}
+                  onChange={(e) => setAddClipSeconds(e.target.value)}
+                  className="w-16 bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200 text-center"
+                />
+              </div>
+              <button
+                onClick={handleAddClip}
+                disabled={addClipSubmitting || (!addClipMinutes && !addClipSeconds)}
+                className="px-4 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 rounded text-sm font-medium transition-colors"
+              >
+                {addClipSubmitting ? "Creating..." : "Create"}
+              </button>
+              <button
+                onClick={() => setShowAddClip(false)}
+                className="px-3 py-1.5 text-sm text-gray-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
 
           {/* Selected clip: review controls ABOVE video */}
           {selectedClip && selectedClip.file_key && (

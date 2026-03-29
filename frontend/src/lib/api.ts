@@ -202,6 +202,8 @@ export const api = {
       fetchAPI(`/api/v1/highlights/${highlightId}/review`, { method: "PATCH", body: JSON.stringify(data) }),
     reviewAll: (jobId: string, reviewStatus: "confirmed" | "rejected") =>
       fetchAPI(`/api/v1/highlights/job/${jobId}/review-all`, { method: "PATCH", body: JSON.stringify({ review_status: reviewStatus }) }),
+    createManual: (jobId: string, data: { event_type: string; timestamp: number; padding?: number }) =>
+      fetchAPI(`/api/v1/highlights/job/${jobId}/manual`, { method: "POST", body: JSON.stringify(data) }),
   },
   stats: {
     listByJob: (jobId: string) =>

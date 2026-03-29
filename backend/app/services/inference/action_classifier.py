@@ -73,6 +73,8 @@ class ActionClassifier:
         state_dict = torch.load(weights_path, map_location=self.device, weights_only=True)
         self.model.load_state_dict(state_dict)
         self.model.to(self.device)
+        if self.device == "cuda":
+            self.model = self.model.half()
         self.model.eval()
         logger.info(f"Action classifier loaded from {weights_path} on {self.device}")
 
@@ -155,6 +157,8 @@ class ActionClassifier:
         mean = self._mean.squeeze(0)  # (3, 1, 1)
         std = self._std.squeeze(0)
         video = (video - mean) / std
+        if self.device == "cuda":
+            video = video.half()
 
         # Reshape to (1, C, T, H, W)
         video = video.permute(1, 0, 2, 3).unsqueeze(0)  # (1, C, T, H, W)

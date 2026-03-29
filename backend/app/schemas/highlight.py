@@ -23,6 +23,12 @@ class HighlightResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ManualHighlightCreate(BaseModel):
+    event_type: str
+    timestamp: float  # seconds into the video where the event occurred
+    padding: float = 5.0  # seconds before/after to include in clip
+
+
 class HighlightReviewUpdate(BaseModel):
     review_status: Literal["confirmed", "rejected"]
     corrected_event_type: str | None = None
