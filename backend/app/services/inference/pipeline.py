@@ -11,6 +11,7 @@ Action classification: MViT v2-S classifies 16-frame player crops into 10 basket
 """
 
 import logging
+import math
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -116,6 +117,11 @@ class InferencePipeline:
         self.players: dict[int, PlayerInfo] = {}
         self.target_track_ids: set[int] = set()
         self._fps: float = 30.0
+        self._vid_stride: int = 1
+
+        # Per-frame annotation data for debug overlay clips
+        # Stored as: {stride_frame_idx: AnnotationFrame}
+        self.frame_annotations: dict[int, dict] = {}
 
     def _get_player_crop(self, frame: np.ndarray, det: Detection) -> np.ndarray:
         x1, y1, x2, y2 = [int(v) for v in det.bbox]
@@ -198,6 +204,7 @@ class InferencePipeline:
         cap.release()
 
         vid_stride = max(1, round(self._fps / target_fps))
+        self._vid_stride = vid_stride
         effective_fps = self._fps / vid_stride
         total_processed = total_frames // vid_stride
 
@@ -215,6 +222,7 @@ class InferencePipeline:
         # Store homography + player bboxes per frame for post-loop classifier event enrichment
         frame_homographies: dict[int, np.ndarray] = {}  # frame_idx -> H
         frame_player_bboxes: dict[int, dict[int, tuple]] = {}  # frame_idx -> {track_id -> bbox}
+        frame_hoop_bboxes: dict[int, tuple] = {}  # frame_idx -> hoop bbox (for shot distance calc)
         # Full possession history (unlike deque, this persists across entire video)
         # Stores (frame_idx, holder_track_id, last_holder_track_id, ball_status) for every frame
         self._target_possession_log: list[tuple[int, int, int, str]] = []
@@ -238,6 +246,9 @@ class InferencePipeline:
             if hoop_dets:
                 best_hoop = max(hoop_dets, key=lambda d: d.confidence)
                 last_hoop_bbox = best_hoop.bbox
+            # Store hoop bbox for post-loop shot distance enrichment
+            if last_hoop_bbox is not None:
+                frame_hoop_bboxes[frame_idx] = last_hoop_bbox
 
             # Run scoring classifier on hoop crop (BGR→RGB)
             if self.scoring_classifier:
@@ -251,6 +262,30 @@ class InferencePipeline:
 
             # Update possession
             possession = self.possession_tracker.update(detections, player_teams)
+
+            # Store annotation data for debug overlay clips
+            self.frame_annotations[frame_idx] = {
+                "players": [
+                    {
+                        "bbox": d.bbox,
+                        "track_id": d.track_id,
+                        "is_target": d.track_id in self.target_track_ids,
+                    }
+                    for d in detections if d.class_name == "person" and d.track_id >= 0
+                ],
+                "ball": next(
+                    ({"bbox": d.bbox} for d in detections if d.class_name == "ball"),
+                    None,
+                ),
+                "hoop": next(
+                    ({"bbox": d.bbox} for d in detections if d.class_name == "hoop"),
+                    None,
+                ),
+                "possession": {
+                    "holder_id": possession.holder_track_id,
+                    "ball_status": possession.ball_status,
+                } if possession else None,
+            }
 
             # Log possession for target filtering (every 10 frames to save memory)
             if frame_idx % 10 == 0:
@@ -358,6 +393,21 @@ class InferencePipeline:
                             event.metadata["court_x"] = court_pos[0]
                             event.metadata["court_y"] = court_pos[1]
 
+                # Hoop-distance-based 2pt/3pt classification for shot events
+                if event.event_type in ("made_basket", "missed_basket") and last_hoop_bbox is not None:
+                    shooter_det = next(
+                        (d for d in detections
+                         if d.track_id == event.player_track_id and d.class_name == "person"),
+                        None,
+                    )
+                    if shooter_det:
+                        shot_dist = self._calculate_shot_distance(shooter_det.bbox, last_hoop_bbox)
+                        if shot_dist is not None:
+                            event.metadata["shot_distance_m"] = round(shot_dist, 2)
+                            event.metadata["shot_type"] = "3pt" if shot_dist >= 7.24 else "2pt"
+                            logger.debug(f"Shot at frame {event.frame_idx}: "
+                                        f"{event.metadata['shot_type']} ({shot_dist:.2f}m)")
+
             heuristic_events.extend(events)
 
             # Log progress every 1000 processed frames
@@ -437,6 +487,36 @@ class InferencePipeline:
                         logger.debug(f"Classifier event frame {peak['frame_idx']}: "
                                    f"no nearby homography (best_dist={best_h_dist})")
 
+                # Hoop-distance-based 2pt/3pt classification for classifier events
+                if scorer_id >= 0:
+                    # Find nearest stored hoop bbox
+                    best_hoop_frame = None
+                    best_hoop_dist = float("inf")
+                    for h_frame in frame_hoop_bboxes:
+                        dist = abs(h_frame - peak["frame_idx"])
+                        if dist < best_hoop_dist:
+                            best_hoop_dist = dist
+                            best_hoop_frame = h_frame
+                    # Find nearest stored player bbox for the scorer
+                    best_scorer_bbox_frame = None
+                    best_scorer_bbox_dist = float("inf")
+                    for b_frame in frame_player_bboxes:
+                        if scorer_id in frame_player_bboxes[b_frame]:
+                            dist = abs(b_frame - peak["frame_idx"])
+                            if dist < best_scorer_bbox_dist:
+                                best_scorer_bbox_dist = dist
+                                best_scorer_bbox_frame = b_frame
+                    if (best_hoop_frame is not None and best_hoop_dist < 60
+                            and best_scorer_bbox_frame is not None and best_scorer_bbox_dist < 60):
+                        hoop_bbox = frame_hoop_bboxes[best_hoop_frame]
+                        scorer_bbox = frame_player_bboxes[best_scorer_bbox_frame][scorer_id]
+                        shot_dist = self._calculate_shot_distance(scorer_bbox, hoop_bbox)
+                        if shot_dist is not None:
+                            metadata["shot_distance_m"] = round(shot_dist, 2)
+                            metadata["shot_type"] = "3pt" if shot_dist >= 7.24 else "2pt"
+                            logger.debug(f"Classifier shot at frame {peak['frame_idx']}: "
+                                        f"{metadata['shot_type']} ({shot_dist:.2f}m)")
+
                 classifier_events.append(BasketballEvent(
                     event_type="made_basket",
                     frame_idx=peak["frame_idx"],
@@ -514,6 +594,40 @@ class InferencePipeline:
             logger.warning("No target tracks matched — returning empty (ReID failed to identify target player). "
                           "Check: are profile/team photos uploaded? Are embeddings valid?")
             return []
+
+    @staticmethod
+    def _calculate_shot_distance(
+        player_bbox: tuple[float, float, float, float],
+        hoop_bbox: tuple[float, float, float, float],
+    ) -> float | None:
+        """Estimate real-world shot distance using hoop pixel width as scale reference.
+
+        The hoop rim is 18 inches (0.457m) in diameter. By comparing the pixel width
+        of the hoop detection to this known size, we derive a pixels-per-meter ratio
+        and convert the pixel distance between the shooter's feet and hoop center
+        to meters.
+
+        Returns distance in meters, or None if hoop width is too small to be reliable.
+        """
+        hx1, hy1, hx2, hy2 = hoop_bbox
+        hoop_pixel_width = hx2 - hx1
+        if hoop_pixel_width < 5:
+            return None  # Too small / unreliable
+
+        hoop_cx = (hx1 + hx2) / 2
+        hoop_cy = (hy1 + hy2) / 2
+
+        # Shooter foot position: bottom-center of their bounding box
+        px1, py1, px2, py2 = player_bbox
+        foot_x = (px1 + px2) / 2
+        foot_y = py2  # bottom of bbox
+
+        pixel_distance = math.sqrt((foot_x - hoop_cx) ** 2 + (foot_y - hoop_cy) ** 2)
+
+        # Scale: hoop_pixel_width pixels = 0.457m (18 inches)
+        real_distance = (pixel_distance / hoop_pixel_width) * 0.457
+
+        return real_distance
 
     def _find_target_near_event(self, frame_idx: int, window: int = 90) -> int | None:
         """Check if the target player was the shooter for a basket event.

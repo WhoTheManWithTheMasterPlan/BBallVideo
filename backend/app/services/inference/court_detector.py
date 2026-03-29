@@ -100,23 +100,57 @@ class CourtDetector:
             Nx2 array of keypoint pixel coordinates, or None if detection fails.
             Zero-valued keypoints indicate low confidence / not detected.
         """
+        self._detect_count = getattr(self, "_detect_count", 0) + 1
+        log_this = self._detect_count <= 5 or self._detect_count % 50 == 0
+
         results = self.model.predict(frame, conf=self.conf_threshold, verbose=False)
         if not results or not results[0].keypoints:
+            if log_this:
+                # Try with lower conf to see if anything is detected at all
+                low_results = self.model.predict(frame, conf=0.1, verbose=False)
+                n_boxes = len(low_results[0].boxes) if low_results and low_results[0].boxes is not None else 0
+                logger.info(f"Court detect #{self._detect_count}: no keypoints at conf={self.conf_threshold}. "
+                           f"At conf=0.1: {n_boxes} boxes detected")
             return None
 
         kps = results[0].keypoints
-        if not hasattr(kps, "confidence") or kps.xy is None:
+        if kps.xy is None:
+            if log_this:
+                logger.info(f"Court detect #{self._detect_count}: keypoints xy is None")
             return None
 
-        keypoints = []
-        for idx, (point, conf) in enumerate(zip(kps.xy[0], kps.confidence[0])):
-            if conf >= self.conf_threshold:
-                keypoints.append(point.cpu().numpy())
-            elif self.last_valid_keypoints is not None and idx < len(self.last_valid_keypoints):
-                # Fall back to last valid detection for this keypoint
-                keypoints.append(self.last_valid_keypoints[idx])
+        # Ultralytics Keypoints uses .conf (not .confidence)
+        has_conf = kps.conf is not None
+        if log_this:
+            if has_conf:
+                confs = kps.conf[0].cpu().numpy()
+                logger.info(f"Court detect #{self._detect_count}: {len(confs)} keypoints, "
+                           f"confidences: min={confs.min():.3f} max={confs.max():.3f} "
+                           f"mean={confs.mean():.3f}, >0.5: {(confs >= 0.5).sum()}, "
+                           f">0.3: {(confs >= 0.3).sum()}, >0.1: {(confs >= 0.1).sum()}")
             else:
-                keypoints.append(np.array([0.0, 0.0]))
+                logger.info(f"Court detect #{self._detect_count}: {kps.xy.shape[1]} keypoints, no per-kp confidence (using all)")
+
+        keypoints = []
+        if has_conf:
+            for idx, (point, conf) in enumerate(zip(kps.xy[0], kps.conf[0])):
+                if conf >= self.conf_threshold:
+                    keypoints.append(point.cpu().numpy())
+                elif self.last_valid_keypoints is not None and idx < len(self.last_valid_keypoints):
+                    keypoints.append(self.last_valid_keypoints[idx])
+                else:
+                    keypoints.append(np.array([0.0, 0.0]))
+        else:
+            # No per-keypoint confidence — use all keypoints from the detection
+            for idx, point in enumerate(kps.xy[0]):
+                pt = point.cpu().numpy()
+                # Treat points at frame edges (0,0) or exactly on boundary as invalid
+                if pt[0] > 1 and pt[1] > 1:
+                    keypoints.append(pt)
+                elif self.last_valid_keypoints is not None and idx < len(self.last_valid_keypoints):
+                    keypoints.append(self.last_valid_keypoints[idx])
+                else:
+                    keypoints.append(np.array([0.0, 0.0]))
 
         keypoints = np.array(keypoints, dtype=np.float32)
 
@@ -141,7 +175,11 @@ class CourtDetector:
         # Filter to valid (non-zero) keypoints
         valid_mask = (keypoints[:, 0] > 0) & (keypoints[:, 1] > 0)
         valid_count = int(np.sum(valid_mask))
-        logger.debug(f"compute_homography: {valid_count} valid keypoints out of {len(keypoints)}")
+        homography_count = getattr(self, "_homography_count", 0) + 1
+        self._homography_count = homography_count
+        log_this = homography_count <= 5 or homography_count % 50 == 0
+        if log_this:
+            logger.info(f"compute_homography #{homography_count}: {valid_count} valid keypoints out of {len(keypoints)}")
         if valid_count < 4:
             logger.debug("compute_homography: <4 valid keypoints, falling back to last_valid_H")
             return self.last_valid_H

@@ -57,7 +57,7 @@ def process_video(self, job_id: str):
 
     # Lazy imports — ML libs only available on the GPU worker
     from app.services.video.storage import get_file_path
-    from app.services.video.clipper import extract_clip, extract_thumbnail
+    from app.services.video.clipper import extract_clip, extract_clip_annotated, extract_thumbnail
     from app.services.inference.pipeline import InferencePipeline
     from app.core.database import sync_session
     from app.models.job import ProcessingJob
@@ -234,7 +234,15 @@ def process_video(self, job_id: str):
                     clip_abs = str(get_file_path(clip_file_key))
                     thumb_abs = str(get_file_path(thumb_file_key))
 
-                extract_clip(video_path, clip_abs, event.timestamp, event.timestamp, padding=5.0)
+                # Generate annotated debug clip with overlays (bboxes, track IDs, target, hoop, ball)
+                extract_clip_annotated(
+                    video_path, clip_abs,
+                    event_timestamp=event.timestamp,
+                    padding=5.0,
+                    frame_annotations=pipeline.frame_annotations,
+                    vid_stride=pipeline._vid_stride,
+                    video_fps=pipeline._fps,
+                )
                 extract_thumbnail(video_path, thumb_abs, event.timestamp)
 
                 # Upload if remote worker
