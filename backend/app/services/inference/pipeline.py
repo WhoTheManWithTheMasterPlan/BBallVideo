@@ -212,9 +212,9 @@ class InferencePipeline:
         # Store homography + player bboxes per frame for post-loop classifier event enrichment
         frame_homographies: dict[int, np.ndarray] = {}  # frame_idx -> H
         frame_player_bboxes: dict[int, dict[int, tuple]] = {}  # frame_idx -> {track_id -> bbox}
-        # Full target possession history (unlike deque, this persists across entire video)
-        # Stores (frame_idx, holder_track_id, last_holder_track_id) for every frame
-        self._target_possession_log: list[tuple[int, int, int]] = []
+        # Full possession history (unlike deque, this persists across entire video)
+        # Stores (frame_idx, holder_track_id, last_holder_track_id, ball_status) for every frame
+        self._target_possession_log: list[tuple[int, int, int, str]] = []
 
         for frame_idx, detections, frame in self.detector.process_video(video_path, vid_stride=vid_stride):
             actual_frame = frame_idx * vid_stride
@@ -253,7 +253,8 @@ class InferencePipeline:
             if frame_idx % 10 == 0:
                 holder = possession.holder_track_id if possession else -1
                 last_holder = possession.last_holder_track_id if possession else -1
-                self._target_possession_log.append((frame_idx, holder, last_holder))
+                ball_status = possession.ball_status if possession else "unknown"
+                self._target_possession_log.append((frame_idx, holder, last_holder, ball_status))
 
             # Pose estimation (every 10 frames to conserve GPU — not every frame)
             if self.pose_estimator and frame_idx % 10 == 0:
@@ -452,25 +453,29 @@ class InferencePipeline:
                           "Check: are profile/team photos uploaded? Are embeddings valid?")
             return []
 
-    def _find_target_near_event(self, frame_idx: int, window: int = 150) -> int | None:
-        """Check if any target track had possession within ±window frames of an event.
+    def _find_target_near_event(self, frame_idx: int, window: int = 90) -> int | None:
+        """Check if the target player was the shooter for a basket event.
+
+        Only rescues if the target was the last_holder while ball was in_air
+        within ±window frames (~3 seconds). This means the target actually
+        shot the ball, not just that they touched it recently.
 
         Returns the target track_id if found, else None.
-        Used to rescue made_basket events where the scorer was misattributed.
-        Uses the persistent possession log (not the limited deque).
         """
         best_track = None
         best_dist = float("inf")
-        for hist_frame, holder, last_holder in self._target_possession_log:
+        for hist_frame, holder, last_holder, ball_status in self._target_possession_log:
             dist = abs(hist_frame - frame_idx)
             if dist > window:
                 continue
-            if holder in self.target_track_ids and dist < best_dist:
-                best_dist = dist
-                best_track = holder
-            if last_holder in self.target_track_ids and dist < best_dist:
+            # Only match if ball is in_air and target was the last holder (= shooter)
+            if ball_status == "in_air" and last_holder in self.target_track_ids and dist < best_dist:
                 best_dist = dist
                 best_track = last_holder
+            # Also match if target currently holds the ball very close to the event (within 1s)
+            if dist <= 30 and holder in self.target_track_ids and dist < best_dist:
+                best_dist = dist
+                best_track = holder
         return best_track
 
     def _find_scorer_at_frame(self, frame_idx: int) -> int:
