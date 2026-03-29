@@ -128,6 +128,7 @@ export default function JobDetailPage() {
 
   const eventTypeLabels: Record<string, string> = {
     made_basket: "Made Basket",
+    missed_basket: "Missed Basket",
     steal: "Steal",
     assist: "Assist",
     rebound: "Rebound",
@@ -135,7 +136,7 @@ export default function JobDetailPage() {
     hustle: "Hustle",
   };
 
-  const eventTypes = ["made_basket", "steal", "assist", "rebound", "block", "hustle"];
+  const eventTypes = ["made_basket", "missed_basket", "steal", "assist", "rebound", "block", "hustle"];
 
   const reviewCounts = {
     pending: highlights.filter((h) => h.review_status === "pending").length,
@@ -206,6 +207,49 @@ export default function JobDetailPage() {
         </div>
       )}
 
+      {/* Stats Summary */}
+      {job.status === "completed" && stats.length > 0 && (() => {
+        const makes = stats.filter((s) => s.event_type === "made_basket").length;
+        const misses = stats.filter((s) => s.event_type === "missed_basket").length;
+        const totalShots = makes + misses;
+        const fgPct = totalShots > 0 ? ((makes / totalShots) * 100).toFixed(1) : "—";
+        const steals = stats.filter((s) => s.event_type === "steal").length;
+        const assists = stats.filter((s) => s.event_type === "assist").length;
+        const rebounds = stats.filter((s) => s.event_type === "rebound").length;
+
+        return (
+          <div className="mb-8">
+            <h2 className="text-xl font-semibold mb-3">Stats Summary</h2>
+            <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+              <div className="p-3 bg-gray-900 rounded-lg border border-gray-700 text-center">
+                <div className="text-2xl font-bold text-green-400">{fgPct}%</div>
+                <div className="text-xs text-gray-400">FG%</div>
+              </div>
+              <div className="p-3 bg-gray-900 rounded-lg border border-gray-700 text-center">
+                <div className="text-2xl font-bold">{makes}/{totalShots}</div>
+                <div className="text-xs text-gray-400">FGM/FGA</div>
+              </div>
+              <div className="p-3 bg-gray-900 rounded-lg border border-gray-700 text-center">
+                <div className="text-2xl font-bold">{assists}</div>
+                <div className="text-xs text-gray-400">Assists</div>
+              </div>
+              <div className="p-3 bg-gray-900 rounded-lg border border-gray-700 text-center">
+                <div className="text-2xl font-bold">{steals}</div>
+                <div className="text-xs text-gray-400">Steals</div>
+              </div>
+              <div className="p-3 bg-gray-900 rounded-lg border border-gray-700 text-center">
+                <div className="text-2xl font-bold">{rebounds}</div>
+                <div className="text-xs text-gray-400">Rebounds</div>
+              </div>
+              <div className="p-3 bg-gray-900 rounded-lg border border-gray-700 text-center">
+                <div className="text-2xl font-bold">{stats.length}</div>
+                <div className="text-xs text-gray-400">Total Events</div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Highlights */}
       {job.status === "completed" && (
         <div>
@@ -249,7 +293,7 @@ export default function JobDetailPage() {
               >
                 All
               </button>
-              {["made_basket", "steal", "assist", "rebound"].map((type) => (
+              {["made_basket", "missed_basket", "steal", "assist", "rebound"].map((type) => (
                 <button
                   key={type}
                   onClick={() => setFilterType(type)}

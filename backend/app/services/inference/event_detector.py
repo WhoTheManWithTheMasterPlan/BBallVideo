@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class BasketballEvent:
-    event_type: str  # "made_basket", "steal", "assist", "rebound"
+    event_type: str  # "made_basket", "missed_basket", "steal", "assist", "rebound"
     frame_idx: int
     timestamp: float
     player_track_id: int
@@ -43,6 +43,9 @@ class ShotTracker:
         self._above_frame = 0
         # Proximity tracking: count frames where ball is very close to hoop
         self._near_hoop_frames: deque = deque(maxlen=30)
+        # Shot attempt tracking for missed basket detection
+        self._last_shot_attempt_frame = -999
+        self._shot_attempt_pending = False  # True when up→down near hoop but not yet classified
 
     def update_hoop(self, hoop_dets: list[Detection]):
         """Update hoop position from detections. Use highest confidence."""
@@ -127,6 +130,10 @@ class ShotTracker:
             if (frame_idx - self._above_frame) > 60:
                 return 0.0
 
+            # This is a shot attempt (ball went up and came down near the hoop)
+            self._shot_attempt_pending = True
+            self._last_shot_attempt_frame = frame_idx
+
             # Find positions above and below hoop for interpolation
             above_pos = None
             below_pos = None
@@ -148,12 +155,14 @@ class ShotTracker:
                 rim_right = hx2 + 0.5 * hoop_w
 
                 if rim_left < predicted_x < rim_right:
+                    self._shot_attempt_pending = False  # Will be classified as made
                     return 0.85  # High confidence — trajectory through rim
                 else:
                     # Near miss — still could be a make with noisy tracking
                     rim_left_loose = hx1 - 1.0 * hoop_w
                     rim_right_loose = hx2 + 1.0 * hoop_w
                     if rim_left_loose < predicted_x < rim_right_loose:
+                        self._shot_attempt_pending = False  # Will be classified as made
                         return 0.55  # Lower confidence — might be a make
 
         return 0.0
@@ -232,13 +241,14 @@ class ShotTracker:
 
 
 class EventDetector:
-    """Detects made baskets, steals, assists, and rebounds from possession + detection data."""
+    """Detects made baskets, missed baskets, steals, assists, and rebounds from possession + detection data."""
 
     STEAL_COOLDOWN_FRAMES = 60  # Don't detect steals within N frames of each other
     ASSIST_WINDOW_FRAMES = 150  # ~5 seconds at 30fps — pass before basket = assist
     BASKET_COOLDOWN_FRAMES = 180  # ~6 seconds between baskets at 30fps
     REBOUND_COOLDOWN_FRAMES = 90  # ~3 seconds between rebounds
     REBOUND_WINDOW_FRAMES = 150  # Look back 5 seconds for a missed shot
+    MISS_CONFIRM_FRAMES = 45  # ~1.5s after shot attempt — if no made_basket, it's a miss
 
     def __init__(self):
         self.shot_tracker = ShotTracker()
@@ -246,6 +256,7 @@ class EventDetector:
         self._last_steal_frame = -999
         self._last_made_basket_frame = -999
         self._last_rebound_frame = -999
+        self._last_missed_basket_frame = -999
 
     def update(
         self,
@@ -270,6 +281,8 @@ class EventDetector:
             scorer_id = possession.last_holder_track_id if possession.ball_status == "in_air" else possession.holder_track_id
             if scorer_id >= 0:
                 self._last_made_basket_frame = frame_idx
+                # Clear any pending shot attempt — it was a make, not a miss
+                self.shot_tracker._shot_attempt_pending = False
                 events.append(BasketballEvent(
                     event_type="made_basket",
                     frame_idx=frame_idx,
@@ -285,6 +298,32 @@ class EventDetector:
                 assist_event = self._check_assist(frame_idx, timestamp, scorer_id)
                 if assist_event:
                     events.append(assist_event)
+
+        # Check for missed basket — shot attempt that wasn't followed by a make
+        if (
+            self.shot_tracker._shot_attempt_pending
+            and (frame_idx - self.shot_tracker._last_shot_attempt_frame) > self.MISS_CONFIRM_FRAMES
+            and (frame_idx - self._last_missed_basket_frame) > self.BASKET_COOLDOWN_FRAMES
+        ):
+            self.shot_tracker._shot_attempt_pending = False
+            self._last_missed_basket_frame = frame_idx
+            # Attribute to last holder before the shot went up
+            shooter_id = possession.last_holder_track_id if possession.last_holder_track_id >= 0 else possession.holder_track_id
+            if shooter_id >= 0:
+                miss_timestamp = self.shot_tracker._last_shot_attempt_frame / 30.0  # approximate
+                # Use the actual timestamp from the attempt frame, not current frame
+                # But we don't store it — use current timestamp minus the delay
+                delay_seconds = (frame_idx - self.shot_tracker._last_shot_attempt_frame) / 30.0
+                events.append(BasketballEvent(
+                    event_type="missed_basket",
+                    frame_idx=self.shot_tracker._last_shot_attempt_frame,
+                    timestamp=timestamp - delay_seconds,
+                    player_track_id=shooter_id,
+                    confidence=0.5,
+                    metadata={"shooter_track_id": shooter_id},
+                ))
+                logger.info(f"Missed basket detected at frame {self.shot_tracker._last_shot_attempt_frame} "
+                           f"(t={timestamp - delay_seconds:.1f}s, shooter=track_{shooter_id})")
 
         # Check for steal
         steal_event = self._check_steal(frame_idx, timestamp, possession)
