@@ -162,8 +162,8 @@ class InferencePipeline:
         if (not player.is_target
                 and self.profile_jersey_number is not None
                 and player.jersey_number == self.profile_jersey_number
-                and player.jersey_votes.get(self.profile_jersey_number, 0) >= 5):
-            # Strong jersey OCR evidence (5+ reads) — accept as target even without ReID
+                and player.jersey_votes.get(self.profile_jersey_number, 0) >= 3):
+            # Jersey OCR evidence (3+ reads) — accept as target even without ReID
             player.is_target = True
             player.reid_confidence = 0.5  # Lower confidence for jersey-only match
             self.target_track_ids.add(det.track_id)
@@ -209,6 +209,9 @@ class InferencePipeline:
         last_hoop_bbox: tuple[float, float, float, float] | None = None
         # Current homography matrix for court mapping
         current_H: np.ndarray | None = None
+        # Court detection counters for debug summary
+        court_attempts = 0
+        court_successes = 0
         # Store homography + player bboxes per frame for post-loop classifier event enrichment
         frame_homographies: dict[int, np.ndarray] = {}  # frame_idx -> H
         frame_player_bboxes: dict[int, dict[int, tuple]] = {}  # frame_idx -> {track_id -> bbox}
@@ -276,14 +279,23 @@ class InferencePipeline:
 
             # Court keypoint detection (every 30 frames for homography)
             if self.court_detector and frame_idx % 30 == 0:
+                court_attempts += 1
                 try:
                     keypoints = self.court_detector.detect_keypoints(frame)
                     if keypoints is not None:
+                        valid_kp = int(np.sum((keypoints[:, 0] > 0) & (keypoints[:, 1] > 0)))
+                        logger.debug(f"Court frame {frame_idx}: {valid_kp} valid keypoints detected")
                         H = self.court_detector.compute_homography(keypoints)
                         if H is not None:
                             current_H = H
-                except Exception:
-                    pass  # Don't break pipeline on court detection errors
+                            court_successes += 1
+                            logger.debug(f"Court frame {frame_idx}: homography succeeded")
+                        else:
+                            logger.debug(f"Court frame {frame_idx}: homography computation failed")
+                    else:
+                        logger.debug(f"Court frame {frame_idx}: no keypoints detected")
+                except Exception as exc:
+                    logger.debug(f"Court frame {frame_idx}: exception — {exc}")
 
             # Store homography + player bboxes for post-loop enrichment (every 30 frames)
             if current_H is not None and frame_idx % 30 == 0:
@@ -360,6 +372,10 @@ class InferencePipeline:
                            f"{len(self.players)} players, "
                            f"{len(self.target_track_ids)} target tracks")
 
+        # Court detection summary
+        if self.court_detector:
+            logger.info(f"Court detector: {court_successes} valid homographies out of {court_attempts} attempts")
+
         # Get classifier-based scoring events
         classifier_events: list[BasketballEvent] = []
         if self.scoring_classifier:
@@ -411,6 +427,15 @@ class InferencePipeline:
                             if court_pos:
                                 metadata["court_x"] = court_pos[0]
                                 metadata["court_y"] = court_pos[1]
+                            else:
+                                logger.debug(f"Classifier event frame {peak['frame_idx']}: "
+                                           f"pixel_to_court returned None for foot ({foot_x:.0f}, {foot_y:.0f})")
+                        else:
+                            logger.debug(f"Classifier event frame {peak['frame_idx']}: "
+                                       f"no nearby bbox for scorer {scorer_id} (best_dist={best_bbox_dist})")
+                    else:
+                        logger.debug(f"Classifier event frame {peak['frame_idx']}: "
+                                   f"no nearby homography (best_dist={best_h_dist})")
 
                 classifier_events.append(BasketballEvent(
                     event_type="made_basket",
@@ -443,6 +468,43 @@ class InferencePipeline:
                         e.metadata["scorer_reassigned"] = True
                         filtered.append(e)
                         logger.info(f"Reassigned made_basket at {e.timestamp:.1f}s to target track {target_scorer}")
+                elif e.event_type == "steal":
+                    # Rescue steal if target is the stealer OR the victim
+                    victim_id = e.metadata.get("victim_track_id", -1)
+                    stealer_id = e.metadata.get("stealer_track_id", -1)
+                    if stealer_id in self.target_track_ids:
+                        e.player_track_id = stealer_id
+                        e.metadata["rescue_reason"] = "target_is_stealer"
+                        filtered.append(e)
+                        logger.info(f"Rescued steal at {e.timestamp:.1f}s — target track {stealer_id} is stealer")
+                    elif victim_id in self.target_track_ids:
+                        # Target got stolen from — still a relevant highlight
+                        e.player_track_id = victim_id
+                        e.metadata["rescue_reason"] = "target_is_victim"
+                        filtered.append(e)
+                        logger.info(f"Rescued steal at {e.timestamp:.1f}s — target track {victim_id} is victim")
+                elif e.event_type == "assist":
+                    # Rescue assist if target is the passer OR the scorer
+                    assister_id = e.metadata.get("assister_track_id", -1)
+                    scorer_id = e.metadata.get("scorer_track_id", -1)
+                    if assister_id in self.target_track_ids:
+                        e.player_track_id = assister_id
+                        e.metadata["rescue_reason"] = "target_is_assister"
+                        filtered.append(e)
+                        logger.info(f"Rescued assist at {e.timestamp:.1f}s — target track {assister_id} is assister")
+                    elif scorer_id in self.target_track_ids:
+                        e.player_track_id = scorer_id
+                        e.metadata["rescue_reason"] = "target_is_scorer"
+                        filtered.append(e)
+                        logger.info(f"Rescued assist at {e.timestamp:.1f}s — target track {scorer_id} is scorer")
+                elif e.event_type == "rebound":
+                    # Rescue rebound — target may have just shot and is rebounding
+                    target_rebounder = self._find_target_near_event(e.frame_idx, window=90)
+                    if target_rebounder is not None:
+                        e.player_track_id = target_rebounder
+                        e.metadata["rescue_reason"] = "target_near_rebound"
+                        filtered.append(e)
+                        logger.info(f"Rescued rebound at {e.timestamp:.1f}s — target track {target_rebounder} near event")
             logger.info(f"Filtered to target: {len(filtered)} of {len(all_events)} events, "
                        f"{len(self.target_track_ids)} target tracks")
             return filtered
@@ -512,6 +574,8 @@ class InferencePipeline:
 
         When both sources detect the same basket, keep the higher-confidence one.
         Events unique to either source are kept as-is.
+        Classifier-only events require confidence >= 0.85.
+        Classifier events within 10s of each other are deduped (keep highest conf).
         """
         all_events = []
 
@@ -519,8 +583,22 @@ class InferencePipeline:
         for event in heuristic:
             all_events.append(event)
 
+        # Dedup classifier events within 10 seconds — keep highest confidence
+        deduped_classifier: list[BasketballEvent] = []
+        for c_event in sorted(classifier, key=lambda e: -e.confidence):
+            is_near = False
+            for kept in deduped_classifier:
+                if abs(kept.timestamp - c_event.timestamp) < 10.0:
+                    is_near = True
+                    break
+            if not is_near:
+                deduped_classifier.append(c_event)
+        if len(deduped_classifier) < len(classifier):
+            logger.info(f"Classifier dedup: {len(classifier)} → {len(deduped_classifier)} "
+                       f"(removed {len(classifier) - len(deduped_classifier)} within 10s)")
+
         # Add classifier events that don't overlap with existing made_basket events
-        for c_event in classifier:
+        for c_event in deduped_classifier:
             is_duplicate = False
             for existing in all_events:
                 if (existing.event_type == "made_basket"
@@ -537,7 +615,11 @@ class InferencePipeline:
                     break
 
             if not is_duplicate:
-                # Classifier found a basket the heuristic missed
+                # Classifier-only event — require higher confidence (0.85) to reduce false positives
+                if c_event.confidence < 0.85:
+                    logger.debug(f"Classifier-only basket at {c_event.timestamp:.1f}s dropped "
+                               f"(conf={c_event.confidence:.2f} < 0.85)")
+                    continue
                 c_event.metadata["source"] = "classifier_only"
                 all_events.append(c_event)
                 logger.info(f"Classifier-only made basket at {c_event.timestamp:.1f}s "

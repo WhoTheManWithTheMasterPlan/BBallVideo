@@ -103,10 +103,15 @@ def process_video(self, job_id: str):
         reid_extractor = None
 
         def _ensure_embedding(photo_record):
-            """Compute and persist embedding if missing. Returns embedding ndarray or None."""
+            """Compute and persist embedding if missing or wrong dimension. Returns embedding ndarray or None."""
             nonlocal reid_extractor
             if photo_record.reid_embedding:
-                return np.frombuffer(photo_record.reid_embedding, dtype=np.float32)
+                emb = np.frombuffer(photo_record.reid_embedding, dtype=np.float32)
+                # Check dimension — ResNet50 produces 2048-dim, old ResNet18 was 512-dim
+                # If mismatch, recompute with current model
+                if emb.shape[0] == 2048:
+                    return emb
+                logger.info(f"Photo {photo_record.id}: embedding dim {emb.shape[0]} != 2048, recomputing")
             # Embedding missing (uploaded via API server without ML libs) — compute on GPU worker
             try:
                 if reid_extractor is None:

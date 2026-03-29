@@ -34,19 +34,21 @@ class ReIDMatch:
 
 
 class ReIDExtractor:
-    """Extracts appearance embeddings using OSNet for player re-identification."""
+    """Extracts appearance embeddings for player re-identification.
 
-    def __init__(self, model_name: str = "osnet_x1_0"):
+    Model priority: resnet50.a2_in1k (via timm) > ResNet18 (torchvision fallback).
+    ResNet50 produces 2048-dim embeddings with much better discrimination than ResNet18's 512-dim.
+    """
+
+    def __init__(self, model_name: str = "resnet50.a2_in1k"):
         try:
             import timm
             self.model = timm.create_model(model_name, pretrained=True, num_classes=0)
+            logger.info(f"ReID model loaded: {model_name} via timm")
         except (ImportError, RuntimeError) as e:
-            # Fallback: use torchvision ResNet18 as feature extractor
-            # RuntimeError: timm installed but model not available (e.g. osnet_x1_0)
-            logger.warning(f"OSNet unavailable ({e}), falling back to ResNet18")
+            logger.warning(f"{model_name} unavailable ({e}), falling back to ResNet18")
             from torchvision.models import resnet18, ResNet18_Weights
             model = resnet18(weights=ResNet18_Weights.DEFAULT)
-            # Remove classification head, keep feature extractor
             self.model = torch.nn.Sequential(*list(model.children())[:-1], torch.nn.Flatten())
 
         self.model.eval()
